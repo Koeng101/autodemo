@@ -1,0 +1,264 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Opentrons Script Schema",
+  "description": "Schema for Opentrons automation script commands",
+  "type": "object",
+  "required": ["id", "commands"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "command_type": {
+                "type": "string",
+                "enum": ["opentrons"]
+              },
+              "payload": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["home"]
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["move_to"]
+                        },
+                        "payload": { "$ref": "#/$defs/moveTo" }
+                      },
+                      "required": ["type", "payload"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["aspirate", "dispense"]
+                        },
+                        "payload": {
+                          "type": "object",
+                          "properties": {
+                            "pipette": { "$ref": "#/$defs/pipette" },
+                            "vol": { "type": "number" },
+                            "move_to": { "$ref": "#/$defs/moveTo" }
+                          },
+                          "required": ["pipette", "vol"]
+                        }
+                      },
+                      "required": ["type", "payload"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["pick_up_tip"]
+                        },
+                        "payload": {
+                          "allOf": [
+                            { "$ref": "#/$defs/labwareLocation" },
+                            {
+                              "properties": {
+                                "pipette": { "$ref": "#/$defs/pipette" }
+                              },
+                              "required": ["pipette"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["type", "payload"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["drop_tip"]
+                        },
+                        "payload": {
+                          "type": "object",
+                          "properties": {
+                            "pipette": { "$ref": "#/$defs/pipette" },
+                            "labware": { "type": "string", "nullable": true },
+                            "deck_slot": { "type": "string", "nullable": true },
+                            "address": { "type": "string", "nullable": true },
+                            "trash": { "type": "boolean" }
+                          },
+                          "required": ["pipette", "trash"]
+                        }
+                      },
+                      "required": ["type", "payload"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tc_set_lid_temp"]
+                        },
+                        "payload": {
+                          "type": "object",
+                          "properties": {
+                            "temperature": { "type": "number" }
+                          },
+                          "required": ["temperature"]
+                        }
+                      },
+                      "required": ["type", "payload"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tc_set_block_temp"]
+                        },
+                        "payload": {
+                          "type": "object",
+                          "properties": {
+                            "temperature": { "type": "number" },
+                            "hold_time_minutes": { "type": "number", "nullable": true },
+                            "hold_time_seconds": { "type": "number", "nullable": true },
+                            "block_max_volume": { "type": "number", "nullable": true }
+                          },
+                          "required": ["temperature"]
+                        }
+                      },
+                      "required": ["type", "payload"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tc_execute_profile"]
+                        },
+                        "payload": {
+                          "type": "object",
+                          "properties": {
+                            "steps": {
+                              "type": "array",
+                              "items": { "$ref": "#/$defs/thermocyclerStep" }
+                            },
+                            "repetitions": { "type": "number" },
+                            "block_max_volume": { "type": "number", "nullable": true }
+                          },
+                          "required": ["steps", "repetitions"]
+                        }
+                      },
+                      "required": ["type", "payload"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tc_open_lid", "tc_close_lid", "tc_deactivate_lid", "tc_deactivate_block"]
+                        }
+                      },
+                      "required": ["type"]
+                    }
+                  ]
+                }
+              }
+            },
+            "required": ["command_type", "payload"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command_type": {
+                "type": "string",
+                "enum": ["human"]
+              },
+              "payload": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": ["quantify"]
+                    },
+                    "payload": {
+                      "allOf": [
+                        { "$ref": "#/$defs/labwareLocation" },
+                        {
+                          "properties": {
+                            "return_key": { "type": "string" }
+                          },
+                          "required": ["return_key"]
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["type", "payload"]
+                }
+              }
+            },
+            "required": ["command_type", "payload"]
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "pipette": {
+      "type": "object",
+      "properties": {
+        "pipette": { "type": "string" },
+        "side": { "type": "string", "enum": ["left", "right"] }
+      },
+      "required": ["pipette", "side"]
+    },
+    "labwareLocation": {
+      "type": "object",
+      "properties": {
+        "labware": { "type": "string" },
+        "deck_slot": { "type": "string" },
+        "address": { "type": "string" }
+      },
+      "required": ["labware", "deck_slot", "address"]
+    },
+    "moveTo": {
+      "type": "object",
+      "properties": {
+        "pipette": { "$ref": "#/$defs/pipette" },
+        "labware": { "type": "string" },
+        "deck_slot": { "type": "string" },
+        "address": { "type": "string" },
+        "x": { "type": "number", "nullable": true },
+        "y": { "type": "number", "nullable": true },
+        "z": { "type": "number", "nullable": true },
+        "module": { "type": "string", "nullable": true }
+      },
+      "required": ["pipette", "labware", "deck_slot", "address"]
+    },
+    "thermocyclerStep": {
+      "type": "object",
+      "properties": {
+        "temperature": { "type": "number" },
+        "hold_time_seconds": { "type": "number" }
+      },
+      "required": ["temperature", "hold_time_seconds"]
+    }
+  }
+}
