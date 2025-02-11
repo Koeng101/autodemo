@@ -4,18 +4,31 @@
 
 package autodemosql
 
+import (
+	"database/sql"
+)
+
+type Code struct {
+	ID                      int64
+	ProjectMessageHistoryID int64
+	Code                    string
+	Complete                bool
+}
+
+type CodeStep struct {
+	ID              int64
+	Code            int64
+	Status          int64
+	StepComment     string
+	NextFunction    string
+	Script          string
+	DataPassthrough string
+	Data            sql.NullString
+}
+
 type Project struct {
 	ID        string
 	CreatedAt int64
-}
-
-type ProjectDatum struct {
-	ID           int64
-	ProjectID    string
-	CreatedAt    int64
-	DataName     string
-	FunctionName string
-	Data         string
 }
 
 type ProjectMessageHistory struct {

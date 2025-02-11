@@ -45,38 +45,80 @@ the lab.
 
 ******************************************************************************/
 
-// LuaPrompt is the system prompt for the chat model
-var LuaPrompt = `If you are doing math, use a lua sandbox, which can be used accessed by writing lua code in bewteen two lua XML blocks. The code will directly be loaded into a lua sandbox. Here is an example of running a math problem in a sandbox:
+var LuaPrompt = `You are a helpful assistant writing biological code. Can do this in two ways: sandbox mode, or script mode. In sandbox mode, you can answer simple queries from the user using code. You should do math with this.
+
 user: What is 8+8?
-assistant: <lua>
+assistant: <lua_sandbox>
 print(8+8)
-</lua>
+</lua_sandbox>
 tool: 16
-Only use Lua when performing calculations. When using lua, make sure to enclose the lua with lua XML with <lua> and </lua>. For non-mathematical queries, respond normally without Lua code. Always be concise.
 
-In addition, you have the library libB built into the sandbox as a pre existing table. If the user asks for something with libB, assume they want to run it, and surround it with xml tags <lua> and </lua>. Do not use "require" at all - this will cause the sandbox to crash.
+user: How many base pairs are in "ATGC"?
+assistant: <lua_sandbox>
+print(#"ATGC")
+<lua_sandbox>
+tool: 4
 
-<lua>
--- Example of using libB
-local commands = libB.OpentronsCommands.new()
-commands:home()
-print(commands:to_json()) -- send output to IO
-</lua>
+The script mode is the one for creating biological protocols. It is more advanced, and comes preloaded with the libB library. Here is some example usage:
 
-<lua>
--- Example of a full script
-local script = libB.Script.new()
+user: Home my robot for me
+assistant: <lua_script>
+function main() -- scripts always initiate at main
+	-- setup script
+	local script_id = libB.uuid.generate()
+	local script = libB.Script.new(script_id)
 
-local opentrons_commands = libB.OpentronsCommands.new()
-opentrons_commands:home()
-script:add_commands(opentrons_commands)
+	-- setup opentrons commands
+	local commands = libB.OpentronsCommands.new()
+	commands:home()
+	script:add_commands(commands)
 
-local human_commands = libB.HumanCommands.new()
-human_commands:quantify("nest_96_wellplate_100ul_pcr_full_skirt", "7", "A1")
-script:add_commands(human_commands)
+	-- there are always 5 returns from scripts:
+	-- 1. a status code: 0 for success, 1 for failure, and 2 for continuation
+	-- 2. a comment for the user
+	-- 3. the next function to run (may be blank)
+	-- 4. the script json
+	-- 5. data to be passed into the next function
+	return 0, "Homing the robot", "", script:to_json(), ""
+end
+</lua_script>
 
-print(script:to_json()) -- send output to IO
-</lua>
+Here is a more complicated example with data processing. You can see how data is passed between functions. The main script returns "process_dna", which is the next function. The system will wait until we have input data to initiate the next function.
+
+user: Quantify the amount of DNA from A1 of deck slot 7 (which is a nest_96_wellplate_100ul_pcr_full_skirt). Tell me if it has a low or high concentration (above 25 is high, below 25 is low).
+assistant: <lua_script>
+function main()
+    local script_id = libB.uuid.generate()
+    local data_id = libB.uuid.generate()
+
+    local script = libB.Script.new(script_id)
+    local human_commands = libB.HumanCommands.new()
+    human_commands:quantify(data_id, "nest_96_wellplate_100ul_pcr_full_skirt", "7", "A1")
+    script:add_commands(human_commands)
+    local script_json = script:to_json()
+
+    -- Define what data we want to retrieve later
+    local data = libB.json.encode({
+        script_id = script_id,
+        data_id = data_id
+    })
+
+    return 2, "Requesting DNA quantification in well", "process_dna", script_json, data
+end
+
+function process_dna(input_data)
+    local data = libB.json.decode(input_data)
+    -- Now we can directly use the data table since keys match our DATA structure
+    local dna_ng = libB.json.decode(DATA[data["script_id"]][data["data_id"]])
+    if dna_ng["ng_per_ul"] > 25 then
+        return 0, "High DNA concentration", "", "", ""
+    else
+        return 1, "Low DNA concentration", "", "", ""
+    end
+end
+</lua_script>
+
+
 `
 
 var upgrader = websocket.Upgrader{
@@ -205,6 +247,40 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		msg := string(p)
 
+		// Add this new check for execute command
+		var gotTool bool
+		if strings.HasPrefix(msg, "<|execute|>") {
+			gotTool = true
+			msg = strings.TrimPrefix(msg, "<|execute|>")
+			msg = strings.TrimSuffix(msg, "\n<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n")
+			input := msg
+			toolHeader := "\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\ntool:\n"
+
+			if strings.Contains(input, "<lua>") {
+				luaPrefix := "<lua>"
+				codeSuffix := "</lua>"
+				// Find the last occurrence of "<lua>"
+				luaStartIndex := strings.LastIndex(input, luaPrefix)
+				if luaStartIndex != -1 {
+					// Look for the next "</lua>" after this last "<lua>"
+					remainingText := input[luaStartIndex+len(luaPrefix):]
+					luaEndIndex := strings.Index(remainingText, codeSuffix)
+					if luaEndIndex != -1 {
+						luaRawCode := input[luaStartIndex+len(luaPrefix) : luaStartIndex+len(luaPrefix)+luaEndIndex]
+						output, err := libb.ExecuteLua(luaRawCode)
+						msg = msg + toolHeader
+
+						if err != nil {
+							errorMsg := fmt.Sprintf("Got error: %s", err.Error())
+							msg = msg + errorMsg
+						} else {
+							msg = msg + output
+						}
+					}
+				}
+			}
+		}
+
 		// Parse existing conversation or create new one
 		var messages []openai.ChatCompletionMessage
 		if len(msg) > 14 && msg[0:15] == "<|begin_of_text" {
@@ -257,86 +333,51 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		stream, err := client.CreateChatCompletionStream(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model:    model,
-				Messages: messages,
-				Stream:   true,
-			},
-		)
-
-		if err != nil {
-			fmt.Printf("ChatCompletionStream error: %v\n", err)
-			return
-		}
-
-		var luaCode strings.Builder
 		// Construct and send the conversation context
-		contextMsg := constructConversationContext(messages)
+		contextMsg := constructConversationContext(messages, gotTool)
 		_ = conn.WriteMessage(messageType, []byte(contextMsg))
 
-		var insideLua bool = false
-		for {
-			var response openai.ChatCompletionStreamResponse
-			response, err = stream.Recv()
-			if errors.Is(err, io.EOF) {
-				break
-			}
+		// If we got a tool command, don't get more from the LLM assistant
+		if !gotTool {
+			stream, err := client.CreateChatCompletionStream(
+				context.Background(),
+				openai.ChatCompletionRequest{
+					Model:    model,
+					Messages: messages,
+					Stream:   true,
+				},
+			)
 
 			if err != nil {
-				fmt.Printf("\nStream error: %v\n", err)
-				break
+				fmt.Printf("ChatCompletionStream error: %v\n", err)
+				return
 			}
 
-			if len(response.Choices) > 0 {
-				token := response.Choices[0].Delta.Content
-				if strings.Contains(luaCode.String(), "<lua>") {
-					insideLua = true
+			for {
+				var response openai.ChatCompletionStreamResponse
+				response, err = stream.Recv()
+				if errors.Is(err, io.EOF) {
+					break
 				}
 
-				luaCode.WriteString(token)
-				_ = conn.WriteMessage(messageType, []byte(token))
-			}
-		}
+				if err != nil {
+					fmt.Printf("\nStream error: %v\n", err)
+					break
+				}
 
-		stream.Close()
+				if len(response.Choices) > 0 {
+					token := response.Choices[0].Delta.Content
 
-		// Handle Lua execution if present
-		input := luaCode.String()
-		fullContext := constructConversationContext(messages) + input
-		toolHeader := "\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\ntool:\n"
-		var luaRawCode string
-		if insideLua {
-			luaPrefix := "<lua>"
-			codeSuffix := "</lua>"
-			luaStartIndex := strings.Index(input, luaPrefix)
-			if luaStartIndex != -1 {
-				luaEndIndex := strings.Index(input[luaStartIndex+len(luaPrefix):], codeSuffix)
-				if luaEndIndex != -1 {
-					luaRawCode = input[luaStartIndex+len(luaPrefix) : luaStartIndex+len(luaPrefix)+luaEndIndex]
+					_ = conn.WriteMessage(messageType, []byte(token))
 				}
 			}
 
-			output, err := libb.ExecuteLua(luaRawCode)
-			_ = conn.WriteMessage(messageType, []byte(toolHeader))
-			fullContext = fullContext + toolHeader
-
-			if err != nil {
-				errorMsg := fmt.Sprintf("Got error: %s", err.Error())
-				_ = conn.WriteMessage(messageType, []byte(errorMsg))
-				fullContext = fullContext + errorMsg
-			} else {
-				_ = conn.WriteMessage(messageType, []byte(output))
-				fullContext = fullContext + output
-			}
+			stream.Close()
 		}
-
-		// Save the complete conversation context
 
 		userHeader := "\n<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n"
 		_ = conn.WriteMessage(messageType, []byte(userHeader))
-		fullContext = fullContext + userHeader
+		fullContext := constructConversationContext(messages, gotTool) + userHeader
 
 		// Save the complete conversation context
 		_, _, err = writeDB.AddMessageHistory(context.Background(), projectID, fullContext)
@@ -347,7 +388,7 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // constructConversationContext helper function to construct conversation context in the expected format
-func constructConversationContext(messages []openai.ChatCompletionMessage) string {
+func constructConversationContext(messages []openai.ChatCompletionMessage, gotTool bool) string {
 	var result strings.Builder
 	result.WriteString("<|begin_of_text|>")
 
@@ -370,7 +411,9 @@ func constructConversationContext(messages []openai.ChatCompletionMessage) strin
 		result.WriteString(msg.Content)
 	}
 
-	result.WriteString("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n")
+	if !gotTool {
+		result.WriteString("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n")
+	}
 	return result.String()
 }
 
@@ -590,24 +633,15 @@ func (w *WriteDB) AddMessageHistory(ctx context.Context, projectID string, conte
 	})
 	return id, createdAt, err
 }
-
-// AddProjectData adds new project data and returns the created ID and timestamp
-func (w *WriteDB) AddProjectData(ctx context.Context, projectID string, dataName string, functionName string, data string) (int64, int64, error) {
-	var id, createdAt int64
+func (w *WriteDB) CreateData(ctx context.Context, codeStepID int64, data string) error {
 	err := w.RunTx(func(db *sql.DB, ctx context.Context) error {
+		var err error
 		queries := autodemosql.New(db)
-		result, err := queries.AddProjectData(ctx, autodemosql.AddProjectDataParams{
-			ProjectID:    projectID,
-			DataName:     dataName,
-			FunctionName: functionName,
-			Data:         data,
+		err = queries.UpdateStepData(ctx, autodemosql.UpdateStepDataParams{
+			ID:   codeStepID,
+			Data: sql.NullString{Valid: true, String: data},
 		})
-		if err != nil {
-			return err
-		}
-		id = result.ID
-		createdAt = result.CreatedAt
-		return nil
+		return err
 	})
-	return id, createdAt, err
+	return err
 }

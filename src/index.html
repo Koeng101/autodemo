@@ -91,6 +91,11 @@
                 chat = "";
                 input.value = "";
             };
+
+			document.getElementById('execute').onclick = function() {
+                ws.send("<|execute|>" + chat);
+                chat = "";
+            };
         });
     </script>
 </head>
@@ -100,6 +105,7 @@
         <div id="chat"></div>
         <textarea id="message" placeholder="Your message..."></textarea>
         <button id="send">Send</button>
+		<button id="execute">Execute Script</button>
 
         <h2>info</h2>
         <p>The chat contains the entire context window in raw-text (rendered for markdown). Chat completions hides too much of the underlying processing - which is just text completion - and this program is meant to strip that away, so you understand how the LLM works under the hood.</p>

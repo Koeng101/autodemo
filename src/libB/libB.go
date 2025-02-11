@@ -97,11 +97,11 @@ func ExecuteLua(code string) (string, error) {
 /*
  */
 type ProtocolState struct {
-	Status     int
-	Comments   string
-	NextFunc   string
-	Script     *Script
-	DataNeeded string
+	Status          int
+	Comments        string
+	NextFunc        string
+	Script          *Script
+	DataPassthrough string
 }
 
 type MockDB struct {
@@ -181,9 +181,9 @@ func ExecuteLuaStep(code string, funcName string, inputData string, data map[str
 
 	// Parse return values
 	state := &ProtocolState{
-		Status:     int(L.CheckNumber(-5)),
-		Comments:   L.CheckString(-4),
-		DataNeeded: L.CheckString(-1),
+		Status:          int(L.CheckNumber(-5)),
+		Comments:        L.CheckString(-4),
+		DataPassthrough: L.CheckString(-1),
 	}
 
 	if nextFunc := L.Get(-3); nextFunc.Type() != lua.LTNil {
@@ -251,7 +251,7 @@ func (db *MockDB) watchScriptCompletion(code string, initialState *ProtocolState
 			if hasAllData {
 				log.Printf("All required data present, continuing execution")
 				// Continue execution
-				newState, err := ExecuteLuaStep(code, state.NextFunc, state.DataNeeded, db.data)
+				newState, err := ExecuteLuaStep(code, state.NextFunc, state.DataPassthrough, db.data)
 				if err != nil {
 					log.Printf("Error continuing execution: %v", err)
 					db.mu.Unlock()

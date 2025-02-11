@@ -75,50 +75,6 @@ func TestAddMessageHistory(t *testing.T) {
 	}
 }
 
-func TestAddProjectData(t *testing.T) {
-	dbPath := "test.db"
-	db, wdb := MakeTestDatabase(dbPath)
-	defer db.Close()
-	defer os.Remove(dbPath)
-	defer os.Remove(dbPath + "-wal")
-	defer os.Remove(dbPath + "-shm")
-
-	ctx := context.Background()
-	dataName := "test-data"
-	functionName := "test-function"
-	projectID := "test-project-1"
-	_ = wdb.CreateProject(ctx, projectID)
-	data := "test data content"
-
-	// Test adding project data
-	id, createdAt, err := wdb.AddProjectData(ctx, projectID, dataName, functionName, data)
-	if err != nil {
-		t.Errorf("Failed to add project data: %s", err)
-	}
-	if id <= 0 {
-		t.Error("Expected positive ID for created project data")
-	}
-	if createdAt <= 0 {
-		t.Error("Expected positive timestamp for created project data")
-	}
-
-	// Verify project data exists and content matches
-	queries := autodemosql.New(db)
-	projectData, err := queries.GetProjectDataByID(ctx, id)
-	if err != nil {
-		t.Errorf("Failed to get project data: %s", err)
-	}
-	if projectData.DataName != dataName {
-		t.Errorf("Data name mismatch. Got %s, want %s", projectData.DataName, dataName)
-	}
-	if projectData.FunctionName != functionName {
-		t.Errorf("Function name mismatch. Got %s, want %s", projectData.FunctionName, functionName)
-	}
-	if projectData.Data != data {
-		t.Errorf("Data content mismatch. Got %s, want %s", projectData.Data, data)
-	}
-}
-
 func TestParseToMessages(t *testing.T) {
 	tests := []struct {
 		name     string

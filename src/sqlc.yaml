@@ -10,3 +10,5 @@ sql:
         overrides:
           - column: "project_message_history.run_protocol"
             go_type: "bool"
+          - column: "code.complete"
+            go_type: "bool"
