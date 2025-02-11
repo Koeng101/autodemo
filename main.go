@@ -10,6 +10,7 @@ import (
 
 func main() {
 	app := autodemo.InitializeApp("test.db")
+	defer app.Close()
 
 	// Serve application
 	s := &http.Server{

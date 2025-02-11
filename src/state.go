@@ -132,6 +132,7 @@ func (r *ProtocolRunner) UpdateStepAndContinue(ctx context.Context, stepID int64
 }
 
 func (r *ProtocolRunner) executeLuaStep(code string, funcName string, dataPassthrough string, dataString string) (*libb.ProtocolState, error) {
+	fmt.Println(dataString)
 	var data map[string]map[string]string
 	if dataString != "" {
 		err := json.Unmarshal([]byte(dataString), &data)
@@ -139,6 +140,7 @@ func (r *ProtocolRunner) executeLuaStep(code string, funcName string, dataPassth
 			return nil, fmt.Errorf("failed to parse json: %v", err)
 		}
 	}
+	fmt.Println(data)
 
 	return libb.ExecuteLuaStep(code, funcName, dataPassthrough, data)
 }

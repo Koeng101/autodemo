@@ -31,8 +31,11 @@ INSERT INTO code_step(code, status, step_comment, next_function, script, data_pa
 -- name: GetCodeStep :one
 SELECT * FROM code_step WHERE id = ?;
 
--- name: GetAllStepsForCode :many
-SELECT * FROM code_step WHERE code = ?;
+-- name: GetAllStepsForCodeFromProjectHistoryID :many
+SELECT cs.id, cs.code, cs.status, cs.step_comment, cs.next_function, cs.script, cs.data_passthrough, cs.data
+FROM code_step AS cs
+JOIN code AS c ON c.id = cs.code
+WHERE c.project_message_history_id = ?;
 
 -- name: GetDataForStep :one
 SELECT data FROM code_step WHERE id = ?;
@@ -42,3 +45,10 @@ UPDATE code_step SET data = ? WHERE id = ?;
 
 -- name: UpdateStepStatus :exec
 UPDATE code_step SET status = ? WHERE id = ?;
+
+-- name: GetLatestStepsForProject :many
+SELECT cs.* FROM code_step cs
+JOIN code c ON cs.code = c.id
+JOIN project_message_history pmh ON c.project_message_history_id = pmh.id
+WHERE pmh.project_id = ? 
+ORDER BY cs.id DESC;

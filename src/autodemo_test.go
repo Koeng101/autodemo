@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/koeng101/autodemo/src/autodemosql"
+	"github.com/sashabaranov/go-openai"
 )
 
 func TestCreateProject(t *testing.T) {
@@ -79,7 +80,7 @@ func TestParseToMessages(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected []Message
+		expected []openai.ChatCompletionMessage
 	}{
 		{
 			name: "Simple conversation",
@@ -91,7 +92,7 @@ User message
 <|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>
 Assistant message`,
-			expected: []Message{
+			expected: []openai.ChatCompletionMessage{
 				{Role: "system", Content: "System message"},
 				{Role: "user", Content: "User message"},
 				{Role: "assistant", Content: "Assistant message"},
@@ -107,7 +108,7 @@ System message
 <|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>
 Assistant message`,
-			expected: []Message{
+			expected: []openai.ChatCompletionMessage{
 				{Role: "system", Content: "System message"},
 				{Role: "assistant", Content: "Assistant message"},
 			},
@@ -115,7 +116,7 @@ Assistant message`,
 		{
 			name:     "Invalid format handling",
 			input:    `Invalid format without proper tags`,
-			expected: []Message{},
+			expected: []openai.ChatCompletionMessage{},
 		},
 	}
 

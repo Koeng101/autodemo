@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Data Upload</title>
+    <style>
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Upload Data</h1>
+        <form id="uploadForm">
+            <label for="stepId">Step ID:</label>
+            <input type="number" id="stepId" required><br><br>
+            
+            <label for="data">JSON Data:</label>
+            <textarea id="data" required></textarea><br>
+            
+            <button type="submit">Upload</button>
+        </form>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').onsubmit = async function(e) {
+            e.preventDefault();
+            
+            const stepId = document.getElementById('stepId').value;
+            const data = document.getElementById('data').value;
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                // Validate JSON
+                JSON.parse(data);
+                
+                const response = await fetch('/upload/' + stepId, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: data
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Upload failed');
+                }
+                
+                resultDiv.textContent = 'Upload successful!';
+                resultDiv.style.color = 'green';
+            } catch (err) {
+                resultDiv.textContent = 'Error: ' + err.message;
+                resultDiv.style.color = 'red';
+            }
+        };
+    </script>
+</body>
+</html>

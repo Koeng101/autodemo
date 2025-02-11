@@ -85,12 +85,15 @@ func (q *Queries) CreateProject(ctx context.Context, id string) error {
 	return err
 }
 
-const getAllStepsForCode = `-- name: GetAllStepsForCode :many
-SELECT id, code, status, step_comment, next_function, script, data_passthrough, data FROM code_step WHERE code = ?
+const getAllStepsForCodeFromProjectHistoryID = `-- name: GetAllStepsForCodeFromProjectHistoryID :many
+SELECT cs.id, cs.code, cs.status, cs.step_comment, cs.next_function, cs.script, cs.data_passthrough, cs.data
+FROM code_step AS cs
+JOIN code AS c ON c.id = cs.code
+WHERE c.project_message_history_id = ?
 `
 
-func (q *Queries) GetAllStepsForCode(ctx context.Context, code int64) ([]CodeStep, error) {
-	rows, err := q.db.QueryContext(ctx, getAllStepsForCode, code)
+func (q *Queries) GetAllStepsForCodeFromProjectHistoryID(ctx context.Context, projectMessageHistoryID int64) ([]CodeStep, error) {
+	rows, err := q.db.QueryContext(ctx, getAllStepsForCodeFromProjectHistoryID, projectMessageHistoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +190,46 @@ func (q *Queries) GetLastMessageForProject(ctx context.Context, projectID string
 	var i GetLastMessageForProjectRow
 	err := row.Scan(&i.ID, &i.Content, &i.CreatedAt)
 	return i, err
+}
+
+const getLatestStepsForProject = `-- name: GetLatestStepsForProject :many
+SELECT cs.id, cs.code, cs.status, cs.step_comment, cs.next_function, cs.script, cs.data_passthrough, cs.data FROM code_step cs
+JOIN code c ON cs.code = c.id
+JOIN project_message_history pmh ON c.project_message_history_id = pmh.id
+WHERE pmh.project_id = ? 
+ORDER BY cs.id DESC
+`
+
+func (q *Queries) GetLatestStepsForProject(ctx context.Context, projectID string) ([]CodeStep, error) {
+	rows, err := q.db.QueryContext(ctx, getLatestStepsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CodeStep
+	for rows.Next() {
+		var i CodeStep
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Status,
+			&i.StepComment,
+			&i.NextFunction,
+			&i.Script,
+			&i.DataPassthrough,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getMessageHistoryByID = `-- name: GetMessageHistoryByID :one

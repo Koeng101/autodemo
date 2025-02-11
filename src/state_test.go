@@ -71,7 +71,7 @@ func TestProtocolExecution(t *testing.T) {
 	}
 
 	// Get steps using regular db connection
-	allSteps, err := queries.GetAllStepsForCode(ctx, historyID)
+	allSteps, err := queries.GetAllStepsForCodeFromProjectHistoryID(ctx, historyID)
 	if err != nil {
 		t.Fatalf("Failed to get steps: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestProtocolExecution(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Read final state
-	allSteps, err = queries.GetAllStepsForCode(ctx, historyID)
+	allSteps, err = queries.GetAllStepsForCodeFromProjectHistoryID(ctx, historyID)
 	if err != nil {
 		t.Fatalf("Failed to get final steps: %v", err)
 	}

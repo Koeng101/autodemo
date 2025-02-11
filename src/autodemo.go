@@ -1,9 +1,11 @@
 package autodemo
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -127,28 +130,42 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-// App implements the application
+func (app *App) Close() error {
+	app.cancel() // Cancel context to stop watchers
+	if err := app.WDB.Close(); err != nil {
+		return fmt.Errorf("failed to close write DB: %w", err)
+	}
+	if err := app.DB.Close(); err != nil {
+		return fmt.Errorf("failed to close read DB: %w", err)
+	}
+	return nil
+}
+
 type App struct {
-	Router *http.ServeMux
-	Logger *slog.Logger
-	DB     *sql.DB
-	WDB    *WriteDB
+	ctx     context.Context
+	cancel  context.CancelFunc
+	Router  *http.ServeMux
+	Logger  *slog.Logger
+	DB      *sql.DB
+	WDB     *WriteDB
+	Runner  *ProtocolRunner
+	Watcher *StepWatcher
 }
 
-// Message represents a chat message
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// InitializeApp creates and configures a new App instance
-func InitializeApp(dbLocation string) App {
+// Modify InitializeApp to include runner and watcher setup
+func InitializeApp(dbLocation string) *App {
+	ctx, cancel := context.WithCancel(context.Background())
 	var app App
 	app.Router = http.NewServeMux()
 	app.Logger = slog.Default()
 	app.Router.HandleFunc("/", app.ProjectHandler)
 	app.Router.HandleFunc("/chat/{projectID}", app.ChatPageHandler)
 	app.Router.HandleFunc("/chat/{projectID}/ws", app.ChatHandler)
+	app.Router.HandleFunc("/status/{projectID}", app.StatusHandler)
+	app.Router.HandleFunc("/upload/{stepID}", app.UploadHandler)
+	app.Router.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "upload.html")
+	})
 
 	// Initialize database
 	writeDB, err := sql.Open("sqlite3", dbLocation)
@@ -163,7 +180,67 @@ func InitializeApp(dbLocation string) App {
 		panic(err)
 	}
 	app.DB = readDB
-	return app
+
+	// Initialize protocol runner and watcher
+	app.Runner = NewProtocolRunner(w)
+	app.Watcher = NewStepWatcher(app.Runner)
+
+	app.ctx = ctx
+	app.cancel = cancel
+	return &app
+}
+
+func (app *App) StatusHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("projectID")
+	if projectID == "" {
+		http.Error(w, "Project ID required", http.StatusBadRequest)
+		return
+	}
+
+	queries := autodemosql.New(app.DB)
+	steps, err := queries.GetLatestStepsForProject(r.Context(), projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(steps)
+}
+
+func (app *App) UploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	stepID := r.PathValue("stepID")
+	if stepID == "" {
+		http.Error(w, "Step ID required", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.ParseInt(stepID, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid step ID", http.StatusBadRequest)
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	_, _ = buf.ReadFrom(r.Body)
+
+	if err := app.WDB.CreateData(r.Context(), id, buf.String()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = app.Watcher.UpdateStep(id, buf.String())
+	if err != nil {
+		fmt.Println("failed to update step")
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 //go:embed index.html
@@ -215,21 +292,22 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Databases! Yay!
 	writeDB := app.WDB
 	queries := autodemosql.New(app.DB)
 
 	// Load initial history immediately after connection
+	var id int64
 	content, err := queries.GetLastMessageForProject(context.Background(), projectID)
 	if err == nil && content.Content != "" {
-		// Send existing history to client
 		err = conn.WriteMessage(websocket.TextMessage, []byte(content.Content))
 		if err != nil {
 			log.Printf("Failed to write initial history: %v", err)
 			return
 		}
 	}
+	id = content.ID
 
+	// Set up OpenAI client
 	apiKey := os.Getenv("API_KEY")
 	baseUrl := os.Getenv("BASE_URL")
 	model := os.Getenv("MODEL")
@@ -247,148 +325,218 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		msg := string(p)
 
-		// Add this new check for execute command
-		var gotTool bool
-		if strings.HasPrefix(msg, "<|execute|>") {
-			gotTool = true
-			msg = strings.TrimPrefix(msg, "<|execute|>")
-			msg = strings.TrimSuffix(msg, "\n<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n")
-			input := msg
-			toolHeader := "\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\ntool:\n"
-
-			if strings.Contains(input, "<lua>") {
-				luaPrefix := "<lua>"
-				codeSuffix := "</lua>"
-				// Find the last occurrence of "<lua>"
-				luaStartIndex := strings.LastIndex(input, luaPrefix)
-				if luaStartIndex != -1 {
-					// Look for the next "</lua>" after this last "<lua>"
-					remainingText := input[luaStartIndex+len(luaPrefix):]
-					luaEndIndex := strings.Index(remainingText, codeSuffix)
-					if luaEndIndex != -1 {
-						luaRawCode := input[luaStartIndex+len(luaPrefix) : luaStartIndex+len(luaPrefix)+luaEndIndex]
-						output, err := libb.ExecuteLua(luaRawCode)
-						msg = msg + toolHeader
-
-						if err != nil {
-							errorMsg := fmt.Sprintf("Got error: %s", err.Error())
-							msg = msg + errorMsg
-						} else {
-							msg = msg + output
-						}
-					}
-				}
-			}
-		}
-
-		// Parse existing conversation or create new one
+		// Parse the context and get current conversation
 		var messages []openai.ChatCompletionMessage
 		if len(msg) > 14 && msg[0:15] == "<|begin_of_text" {
-			// Use existing conversation context
-			parsedMsgs := parseToMessages(msg)
+			messages = parseToMessages(msg)
+		} else if strings.HasPrefix(msg, "<|execute|>") {
+			msgWithoutExecute := strings.TrimPrefix(msg, "<|execute|>")
+			messages = parseToMessages(msgWithoutExecute)
+		} else if content.Content != "" {
+			parsedMsgs := parseToMessages(content.Content)
 			for _, m := range parsedMsgs {
-				role := m.Role
-				// Map roles to OpenAI chat roles
-				switch role {
-				case "system":
-					role = "system"
-				case "user":
-					role = "user"
-				case "assistant":
-					role = "assistant"
-				}
 				messages = append(messages, openai.ChatCompletionMessage{
-					Role:    role,
+					Role:    m.Role,
 					Content: m.Content,
 				})
 			}
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    "user",
+				Content: msg,
+			})
 		} else {
-			// For new conversations, first check if we have history
-			content, err := queries.GetLastMessageForProject(context.Background(), projectID)
-			if err == nil && content.Content != "" {
-				// Use existing history if available
-				parsedMsgs := parseToMessages(content.Content)
-				for _, m := range parsedMsgs {
-					messages = append(messages, openai.ChatCompletionMessage{
-						Role:    m.Role,
-						Content: m.Content,
-					})
-				}
-				messages = append(messages, openai.ChatCompletionMessage{
+			messages = []openai.ChatCompletionMessage{
+				{
+					Role:    "system",
+					Content: LuaPrompt,
+				},
+				{
 					Role:    "user",
 					Content: msg,
-				})
-			} else {
-				// Create new conversation
-				messages = []openai.ChatCompletionMessage{
-					{
-						Role:    "system",
-						Content: LuaPrompt,
-					},
-					{
-						Role:    "user",
-						Content: msg,
-					},
-				}
-			}
-		}
-
-		// Construct and send the conversation context
-		contextMsg := constructConversationContext(messages, gotTool)
-		_ = conn.WriteMessage(messageType, []byte(contextMsg))
-
-		// If we got a tool command, don't get more from the LLM assistant
-		if !gotTool {
-			stream, err := client.CreateChatCompletionStream(
-				context.Background(),
-				openai.ChatCompletionRequest{
-					Model:    model,
-					Messages: messages,
-					Stream:   true,
 				},
-			)
-
-			if err != nil {
-				fmt.Printf("ChatCompletionStream error: %v\n", err)
-				return
 			}
-
-			for {
-				var response openai.ChatCompletionStreamResponse
-				response, err = stream.Recv()
-				if errors.Is(err, io.EOF) {
-					break
-				}
-
-				if err != nil {
-					fmt.Printf("\nStream error: %v\n", err)
-					break
-				}
-
-				if len(response.Choices) > 0 {
-					token := response.Choices[0].Delta.Content
-
-					_ = conn.WriteMessage(messageType, []byte(token))
-				}
-			}
-
-			stream.Close()
 		}
 
-		userHeader := "\n<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n"
-		_ = conn.WriteMessage(messageType, []byte(userHeader))
-		fullContext := constructConversationContext(messages, gotTool) + userHeader
+		// Send initial context
+		contextMsg := constructConversationContext(messages)
+		err = conn.WriteMessage(messageType, []byte(contextMsg))
+		if err != nil {
+			log.Printf("Failed to write context: %v", err)
+			return
+		}
 
-		// Save the complete conversation context
-		_, _, err = writeDB.AddMessageHistory(context.Background(), projectID, fullContext)
+		if strings.HasPrefix(msg, "<|execute|>") {
+			// Execute command - only for lua_script
+			lastMsg := messages[len(messages)-1].Content
+
+			if strings.Contains(lastMsg, "<lua_script>") {
+				output := app.executeLuaScript(r.Context(), id, lastMsg)
+				fmt.Println(output)
+				toolMsg := fmt.Sprintf("tool:\n%s", output)
+
+				messages = append(messages, openai.ChatCompletionMessage{
+					Role:    "assistant",
+					Content: toolMsg,
+				})
+
+				err = conn.WriteMessage(messageType, []byte(toolMsg))
+				if err != nil {
+					log.Printf("Failed to write tool output: %v", err)
+					return
+				}
+			}
+		} else {
+			// Normal message flow - stream LLM response
+			for {
+				// Stream the LLM response
+				stream, err := client.CreateChatCompletionStream(
+					context.Background(),
+					openai.ChatCompletionRequest{
+						Model:    model,
+						Messages: messages,
+						Stream:   true,
+					},
+				)
+				if err != nil {
+					log.Printf("ChatCompletionStream error: %v\n", err)
+					return
+				}
+
+				var currentResponse strings.Builder
+				// Collect the full response
+				for {
+					var response openai.ChatCompletionStreamResponse
+					response, err = stream.Recv()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						log.Printf("Stream error: %v\n", err)
+						stream.Close()
+						return
+					}
+
+					if len(response.Choices) > 0 {
+						token := response.Choices[0].Delta.Content
+						_ = conn.WriteMessage(messageType, []byte(token))
+						currentResponse.WriteString(token)
+					}
+				}
+
+				stream.Close()
+
+				// Add the response to messages and write it
+				llmResponse := currentResponse.String()
+				messages = append(messages, openai.ChatCompletionMessage{
+					Role:    "assistant",
+					Content: llmResponse,
+				})
+
+				// Check if we got a sandbox to execute
+				if strings.Contains(llmResponse, "<lua_sandbox>") {
+					output := app.executeLuaSandbox(llmResponse)
+					toolOutput := fmt.Sprintf("tool:\n%s", output)
+					toolMsg := fmt.Sprintf("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n%s", toolOutput)
+
+					// Add tool output to messages and send
+					messages = append(messages, openai.ChatCompletionMessage{
+						Role:    "assistant",
+						Content: toolOutput,
+					})
+
+					_ = conn.WriteMessage(messageType, []byte(toolMsg))
+
+					// Continue the loop to get another LLM response
+					_ = conn.WriteMessage(messageType, []byte("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n%s"))
+					continue
+				}
+
+				// If no sandbox was found, we're done
+				break
+			}
+		}
+
+		// Add user header and save context
+		userHeader := "\n<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n"
+		err = conn.WriteMessage(messageType, []byte(userHeader))
+		if err != nil {
+			log.Printf("Failed to write user header: %v", err)
+			return
+		}
+
+		fullContext := constructConversationContext(messages)
+		id, _, err = writeDB.AddMessageHistory(r.Context(), projectID, fullContext)
 		if err != nil {
 			log.Printf("Failed to save message history: %v", err)
 		}
 	}
 }
 
+func (app *App) executeLuaSandbox(msg string) string {
+	luaPrefix := "<lua_sandbox>"
+	codeSuffix := "</lua_sandbox>"
+
+	luaStartIndex := strings.LastIndex(msg, luaPrefix)
+	if luaStartIndex == -1 {
+		return "Error: Could not find lua_sandbox start tag"
+	}
+
+	remainingText := msg[luaStartIndex+len(luaPrefix):]
+	luaEndIndex := strings.Index(remainingText, codeSuffix)
+	if luaEndIndex == -1 {
+		return "Error: Could not find lua_sandbox end tag"
+	}
+
+	luaCode := msg[luaStartIndex+len(luaPrefix) : luaStartIndex+len(luaPrefix)+luaEndIndex]
+	output, err := libb.ExecuteLua(luaCode)
+	if err != nil {
+		return fmt.Sprintf("Got error: %s", err.Error())
+	}
+
+	return output
+}
+
+func (app *App) executeLuaScript(ctx context.Context, historyID int64, msg string) string {
+	scriptPrefix := "<lua_script>"
+	scriptSuffix := "</lua_script>"
+
+	scriptStartIndex := strings.LastIndex(msg, scriptPrefix)
+	if scriptStartIndex == -1 {
+		return "Error: Could not find lua_script start tag"
+	}
+
+	remainingText := msg[scriptStartIndex+len(scriptPrefix):]
+	scriptEndIndex := strings.Index(remainingText, scriptSuffix)
+	if scriptEndIndex == -1 {
+		return "Error: Could not find lua_script end tag"
+	}
+
+	scriptCode := msg[scriptStartIndex+len(scriptPrefix) : scriptStartIndex+len(scriptPrefix)+scriptEndIndex]
+
+	fmt.Println(historyID)
+	err := app.Runner.StartProtocol(ctx, historyID, scriptCode)
+	if err != nil {
+		return fmt.Sprintf("Failed to start protocol: %s", err.Error())
+	}
+
+	queries := autodemosql.New(app.DB)
+	steps, err := queries.GetAllStepsForCodeFromProjectHistoryID(ctx, historyID)
+	if err != nil {
+		return fmt.Sprintf("Failed to get steps: %s", err.Error())
+	}
+	if len(steps) == 0 {
+		return "No steps created for protocol"
+	}
+
+	initialStep := steps[len(steps)-1]
+	app.Watcher.WatchStep(ctx, initialStep.ID)
+
+	return fmt.Sprintf("Protocol started with step ID: %d\nStatus: %d\nComment: %s",
+		initialStep.ID, initialStep.Status, initialStep.StepComment)
+}
+
 // constructConversationContext helper function to construct conversation context in the expected format
-func constructConversationContext(messages []openai.ChatCompletionMessage, gotTool bool) string {
+func constructConversationContext(messages []openai.ChatCompletionMessage) string {
 	var result strings.Builder
 	result.WriteString("<|begin_of_text|>")
 
@@ -411,15 +559,13 @@ func constructConversationContext(messages []openai.ChatCompletionMessage, gotTo
 		result.WriteString(msg.Content)
 	}
 
-	if !gotTool {
-		result.WriteString("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n")
-	}
+	result.WriteString("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n")
 	return result.String()
 }
 
 // parseToMessages parses the input string into Message structs
-func parseToMessages(input string) []Message {
-	var messages []Message
+func parseToMessages(input string) []openai.ChatCompletionMessage {
+	var messages []openai.ChatCompletionMessage
 
 	// Split on message boundaries
 	parts := strings.Split(input, "<|eot_id|>")
@@ -458,7 +604,7 @@ func parseToMessages(input string) []Message {
 
 		// Only add message if we have both role and content
 		if role != "" && content != "" {
-			messages = append(messages, Message{
+			messages = append(messages, openai.ChatCompletionMessage{
 				Role:    role,
 				Content: content,
 			})

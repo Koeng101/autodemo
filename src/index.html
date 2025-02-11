@@ -50,6 +50,59 @@
         }
     </style>
     <script>
+		function checkStatus() {
+	    // Extract project ID from URL path
+	    const projectID = window.location.pathname.split('/')[2];
+	    
+	    fetch('/status/' + projectID)
+	        .then(response => response.json())
+	        .then(steps => {
+	            // Create or get status div
+	            let statusDiv = document.getElementById('status');
+	            if (!statusDiv) {
+	                statusDiv = document.createElement('div');
+	                statusDiv.id = 'status';
+	                document.querySelector('.chat-container').insertBefore(
+	                    statusDiv,
+	                    document.getElementById('chat')
+	                );
+	            }
+	
+	            // Clear previous status
+	            statusDiv.innerHTML = '';
+	
+	            // Display each step's status
+	            steps.forEach(step => {
+	                const stepEl = document.createElement('div');
+	                stepEl.style.padding = '10px';
+	                stepEl.style.margin = '5px';
+	                stepEl.style.border = '1px solid #ccc';
+	
+	                // Set color based on status
+	                switch(step.Status) {
+	                    case 0: // Complete
+	                        stepEl.style.backgroundColor = '#90EE90';
+	                        break;
+	                    case 1: // Failure
+	                        stepEl.style.backgroundColor = '#FFB6C1';
+	                        break;
+	                    case 2: // Continuation
+	                        stepEl.style.backgroundColor = '#FFD700';
+	                        break;
+	                }
+	
+	                stepEl.textContent = `${step.StepComment} (Status: ${step.Status})`;
+	                statusDiv.appendChild(stepEl);
+	            });
+	        })
+	        .catch(console.error);
+	}
+	
+	// Check status every 5 seconds
+	setInterval(checkStatus, 5000);
+
+
+
         document.addEventListener('DOMContentLoaded', function() {
             // Get project ID from URL path
             const projectID = window.location.pathname.substring(1);
