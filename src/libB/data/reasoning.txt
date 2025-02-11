@@ -1,0 +1,92 @@
+<|start_header_id|>user<|end_header_id|>
+I am trying to validate a PCR reaction. I have two primers:
+```
+M13_forward	TGTAAAACGACGGCCAGT
+M13_reverse	CAGGAAACAGCTATGAC
+```
+
+That I will be using to a PCR a plasmid. I want you to setup that PCR, then validate that I get more than 25ng of DNA out of a qubit quantification reaction, to make sure it worked.
+
+On the robot deck I currently have a opentrons_96_tiprack_20ul tipbox at 1, a opentrons_24_tuberack_nest_1.5ml_snapcap at 2, and nest_96_wellplate_100ul_pcr_full_skirt on my thermocycler at 7. In A1 of the tuberack is mastermix, B1 is the primer mix of M13_forward and M13_reverse, C1 has template, and D1 has water. These are the resources you'll be programming for. It is a 2x mastermix, 1uL of primer is needed per 10uL, and 1uL of template in total.
+
+Here are the conditions that I want you to initially try:
+```
+95c 30s
+70c 30s
+72c 60s
+30x
+20uL reaction: taq polymerase
+```
+
+If that doesn't work, try to figure out how to fix the PCR reaction and try again.
+<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+<thinking>
+</thinking>
+<lua_script>
+-- main sets up the PCR reaction, then passes outputs to process_dna
+local function main()
+	local script_id = libB.uuid.generate()
+	local script = libB.Script.new(script_id)
+
+	-- Opentrons code
+	local opentrons_commands = libB.OpentronsCommands.new()
+	local pipette = { pipette = "p20_single_gen2", side = "right" }
+	local tips = Labware.new("opentrons_96_tiprack_20ul", "1")
+    local source = Labware.new("opentrons_24_tuberack_nest_1.5ml_snapcap", "2")
+    local destination = Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
+
+	opentrons_commands:home()
+	local operations = {
+	    {tip = "A1", source = "A1", volume = 10}, -- 2x mastermix means 10uL mastermix for 20uL reaction
+	    {tip = "B1", source = "B1", volume = 2}, -- 1uL per 10uL means 2uL primers for 20uL reaction
+	    {tip = "C1", source = "C1", volume = 1}, -- only need 1uL of template
+	    {tip = "D1", source = "D1", volume = 7} -- 10 + 2 + 1 = 13, so I need 7uL of water to bring it to 20uL
+	}
+	for _, op in ipairs(operations) do
+	    opentrons_commands
+	        :pick_up_tip(pipette, tips:well(op.tip))
+	        :aspirate(pipette, op.volume, source:well(op.source))
+	        :dispense(pipette, op.volume, destination:well("A1"))
+	        :drop_tip(pipette)
+	end
+	opentrons_commands:home()
+	opentrons_commands -- this sets up the PCR reaction
+		:tc_open_lid()
+    	:tc_set_lid_temp(100)
+    	:tc_execute_profile({
+    	    { temperature = 95, hold_time_seconds = 30 },
+    	    { temperature = 70, hold_time_seconds = 30 },
+    	    { temperature = 72, hold_time_seconds = 60 }
+    	}, 30, 20)
+    	:tc_deactivate_block()
+    	:tc_deactivate_lid()
+
+	-- Human code
+	local human_commands = HumanCommands.new()
+	local data_id = libB.uuid.generate()
+	human_commands:quantify(data_id, destination.labware, destination.deck_slot, "A1")
+
+	-- Update script
+	script:add_commands(opentrons_commands)
+	script:add_commands(human_commands)
+	local script_json = script:to_json()
+
+	-- Define what data we want to retrieve later
+    local data = libB.json.encode({
+        script_id = script_id,
+        data_id = data_id
+    })
+
+	return 2, "PCR, then quantify DNA", "process_results", script_json, data
+end
+
+function process_results(input_data)
+	local data = libB.json.decode(input_data)
+	local dna_ng = libB.json.decode(DATA[data["script_id"]][data["data_id"]])
+	if dna_ng["ng_per_ul"] > 25 then
+        return 0, "High DNA concentration", "", "", ""
+    else
+        return 4, "Low DNA concentration", "", "", ""
+    end
+end

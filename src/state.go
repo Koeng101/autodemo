@@ -103,6 +103,11 @@ func (r *ProtocolRunner) UpdateStepAndContinue(ctx context.Context, stepID int64
 			return fmt.Errorf("failed to update step data: %v", err)
 		}
 
+		step, err := queries.GetCodeStep(ctx, stepID)
+		if err != nil {
+			return fmt.Errorf("failed to query step: %v", err)
+		}
+
 		// Execute the step within the same transaction
 		state, err := r.executeStep(db, ctx, stepID)
 		if err != nil {
@@ -116,7 +121,7 @@ func (r *ProtocolRunner) UpdateStepAndContinue(ctx context.Context, stepID int64
 
 		// Always create a new step when processing data
 		_, err = queries.CreateCodeStep(ctx, autodemosql.CreateCodeStepParams{
-			Code:            stepID,
+			Code:            step.Code,
 			Status:          int64(state.Status),
 			StepComment:     state.Comments,
 			NextFunction:    state.NextFunc,
