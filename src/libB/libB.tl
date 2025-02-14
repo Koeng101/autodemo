@@ -415,6 +415,137 @@ return json
 ]]) as function(): json_type
 local json = json_func()
 
+--[[
+Primers provides utilities for creating primers and DNA barcodes.
+
+Primers are short sequences of DNA that can be used to amplify DNA sequences
+and they are the workhorse of modern molecular biology.
+
+Essentially primers are short pieces of single stranded DNA that can
+bind to a target sequence of single stranded DNA. These primers serve as a
+marker for polymerases to bind and start adding free floating nucleotides
+(ACTGs) to a single strand piece of DNA to form a double stranded piece of DNA.
+
+This is a crucial step in the process of PCR (polymerase chain reaction).
+https://en.wikipedia.org/wiki/Polymerase_chain_reaction
+]]
+
+-- Module declaration
+local primers = {}
+
+-- Type declarations
+local record Thermodynamics
+    H: number  -- enthalpy (dH, kcal/mol)
+    S: number  -- entropy (dS, cal/mol-K)
+end
+
+-- For reference: https://www.sigmaaldrich.com/technical-documents/articles/biology/oligos-melting-temp.html
+
+-- Nearest neighbor thermodynamics values
+local nearest_neighbors_thermodynamics: {string:Thermodynamics} = {
+    AA = { H = -7.6, S = -21.3 },
+    TT = { H = -7.6, S = -21.3 },
+    AT = { H = -7.2, S = -20.4 },
+    TA = { H = -7.2, S = -21.3 },
+    CA = { H = -8.5, S = -22.7 },
+    TG = { H = -8.5, S = -22.7 },
+    GT = { H = -8.4, S = -22.4 },
+    AC = { H = -8.4, S = -22.4 },
+    CT = { H = -7.8, S = -21.0 },
+    AG = { H = -7.8, S = -21.0 },
+    GA = { H = -8.2, S = -22.2 },
+    TC = { H = -8.2, S = -22.2 },
+    CG = { H = -10.6, S = -27.2 },
+    GC = { H = -9.8, S = -24.4 },
+    GG = { H = -8.0, S = -19.9 },
+    CC = { H = -8.0, S = -19.9 }
+}
+
+-- Thermodynamic penalties
+local initial_thermodynamic_penalty: Thermodynamics = { H = 0.2, S = -5.7 }    -- penalty for initiating helix
+local symmetry_thermodynamic_penalty: Thermodynamics = { H = 0, S = -1.4 }     -- penalty for self-complementarity  
+local terminal_AT_thermodynamic_penalty: Thermodynamics = { H = 2.2, S = 6.9 } -- penalty for 3' AT
+
+-- Utility function to reverse complement a DNA sequence
+local function reverse_complement(sequence: string): string
+    local complement: {string:string} = {
+        A = "T", T = "A", C = "G", G = "C",
+        a = "t", t = "a", c = "g", g = "c"
+    }
+    
+    local result = {}
+    for i = #sequence, 1, -1 do
+        local char = sequence:sub(i,i)
+        table.insert(result, complement[char] or char)
+    end
+    return table.concat(result)
+end
+
+-- SantaLucia algorithm implementation
+function primers.santa_lucia(sequence: string, primer_concentration: number, salt_concentration: number, magnesium_concentration: number): (number, number, number)
+    sequence = sequence:upper()
+    
+    local GAS_CONSTANT = 1.9872  -- gas constant (cal / mol - K)
+    local symmetry_factor: number
+    local dH = initial_thermodynamic_penalty.H
+    local dS = initial_thermodynamic_penalty.S
+    
+    -- Apply symmetry penalty if sequence is self-complementary
+    if sequence == reverse_complement(sequence) then
+        dH = dH + symmetry_thermodynamic_penalty.H
+        dS = dS + symmetry_thermodynamic_penalty.S
+        symmetry_factor = 1
+    else
+        symmetry_factor = 4
+    end
+    
+    -- Apply penalty if 3' nucleotides are A or T
+    local last_base = sequence:sub(-1)
+    if last_base == "A" or last_base == "T" then
+        dH = dH + terminal_AT_thermodynamic_penalty.H
+        dS = dS + terminal_AT_thermodynamic_penalty.S
+    end
+    
+    -- Apply salt penalty (von Ahsen et al 1999)
+    local salt_effect = salt_concentration + (magnesium_concentration * 140)
+    dS = dS + (0.368 * (#sequence - 1) * math.log(salt_effect))
+    
+    -- Calculate penalty for nearest neighbor effects
+    for i = 1, #sequence - 1 do
+        local pair = sequence:sub(i, i + 1)
+        local dT = nearest_neighbors_thermodynamics[pair]
+        if dT then
+            dH = dH + dT.H
+            dS = dS + dT.S
+        end
+    end
+    
+    local melting_temp = dH * 1000 / (dS + GAS_CONSTANT * math.log(primer_concentration / symmetry_factor)) - 273.15
+    return melting_temp, dH, dS
+end
+
+-- Marmur-Doty algorithm implementation
+function primers.marmur_doty(sequence: string): number
+    sequence = sequence:upper()
+    
+    local a_count = select(2, sequence:gsub("A", "A")) as integer
+    local t_count = select(2, sequence:gsub("T", "T")) as integer
+    local c_count = select(2, sequence:gsub("C", "C")) as integer
+    local g_count = select(2, sequence:gsub("G", "G")) as integer
+    
+    return 2 * (a_count + t_count) + 4 * (c_count + g_count) - 7.0
+end
+
+-- Convenience function with default parameters
+function primers.melting_temp(sequence: string): number
+    local primer_concentration = 500e-9  -- 500 nM (nanomolar) primer concentration
+    local salt_concentration = 50e-3     -- 50 mM (millimolar) sodium concentration
+    local magnesium_concentration = 0.0  -- 0 mM (millimolar) magnesium concentration
+    
+    local melting_temp = primers.santa_lucia(sequence, primer_concentration, salt_concentration, magnesium_concentration)
+    return melting_temp
+end
+
 local record UUID
   -- Generate a new UUID v4
   generate: function(): string
@@ -1056,5 +1187,6 @@ return {
 	HumanCommands = HumanCommands,
 	json = json,
 	generate_protocol = generate_protocol,
-	uuid = uuid
+	uuid = uuid,
+	primers = primers
 }

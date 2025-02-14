@@ -122,6 +122,235 @@ end
 </lua_script>
 
 
+
+Here is a much more complicated user interaction. Notice the back-and-forth between the user and the assistant. The assistant (tool) will be run by the lua sandbox, as defined above.
+
+
+
+### USER ###
+I am trying to validate a PCR reaction. I have two primers:
+M13_forward	GTAAAACGACGGCCAGT
+M13_reverse	CAGGAAACAGCTATGAC
+
+That I will be using to a PCR a plasmid. I want you to setup that PCR, then validate that I get more than 25ng of DNA out of a qubit quantification reaction, to make sure it worked.
+
+On the robot deck I currently have a opentrons_96_tiprack_20ul tipbox at 1, a opentrons_24_tuberack_nest_1.5ml_snapcap at 2, and nest_96_wellplate_100ul_pcr_full_skirt on my thermocycler at 7. In A1 of the tuberack is mastermix, B1 is the primer mix of M13_forward and M13_reverse, C1 has template, and D1 has water. These are the resources you'll be programming for. It is a 2x mastermix, 1uL of primer is needed per 10uL, and 1uL of template in total.
+
+Here are the conditions that I want you to initially try:
+95c 30s
+70c 30s
+72c 60s
+30x
+20uL reaction: taq polymerase
+
+### EOT ###
+
+### ASSISTANT ###
+<thinking>
+The user wants to do a PCR reaction followed by a quantification reaction. This will require me to create a script to run a PCR reaction on an opentrons, then have a human technician quantify the DNA.
+
+The user has not specified the DNA quantity, but 25ng is a decent cutoff point for PCR.
+
+I will write this lua script and then wait for the user to execute it.
+</thinking>
+<lua_script>
+-- main sets up the PCR reaction, then passes outputs to process_dna
+local function main()
+	local script_id = libB.uuid.generate()
+	local script = libB.Script.new(script_id)
+
+	-- Opentrons code
+	local opentrons_commands = libB.OpentronsCommands.new()
+	local pipette = { pipette = "p20_single_gen2", side = "right" }
+	local tips = libB.Labware.new("opentrons_96_tiprack_20ul", "1")
+    local source = libB.Labware.new("opentrons_24_tuberack_nest_1.5ml_snapcap", "2")
+    local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
+
+	opentrons_commands:home()
+	local operations = {
+	    {tip = "A1", source = "A1", volume = 10}, -- 2x mastermix means 10uL mastermix for 20uL reaction
+	    {tip = "B1", source = "B1", volume = 2}, -- 1uL per 10uL means 2uL primers for 20uL reaction
+	    {tip = "C1", source = "C1", volume = 1}, -- only need 1uL of template
+	    {tip = "D1", source = "D1", volume = 7} -- 10 + 2 + 1 = 13, so I need 7uL of water to bring it to 20uL
+	}
+	for _, op in ipairs(operations) do
+	    opentrons_commands
+	        :pick_up_tip(pipette, tips:well(op.tip))
+	        :aspirate(pipette, op.volume, source:well(op.source))
+	        :dispense(pipette, op.volume, destination:well("A1"))
+	        :drop_tip(pipette)
+	end
+	opentrons_commands:home()
+	opentrons_commands -- this sets up the PCR reaction
+		:tc_open_lid()
+    	:tc_set_lid_temp(100)
+    	:tc_execute_profile({
+    	    { temperature = 95, hold_time_seconds = 30 },
+    	    { temperature = 70, hold_time_seconds = 30 },
+    	    { temperature = 72, hold_time_seconds = 60 }
+    	}, 30, 20)
+    	:tc_deactivate_block()
+    	:tc_deactivate_lid()
+
+	-- Human code
+	local human_commands = HumanCommands.new()
+	local data_id = libB.uuid.generate()
+	human_commands:quantify(data_id, destination.labware, destination.deck_slot, "A1")
+
+	-- Update script
+	script:add_commands(opentrons_commands)
+	script:add_commands(human_commands)
+	local script_json = script:to_json()
+
+	-- Define what data we want to retrieve later
+    local data = libB.json.encode({
+        script_id = script_id,
+        data_id = data_id
+    })
+
+	return 2, "PCR, then quantify DNA", "process_results", script_json, data
+end
+
+function process_results(input_data)
+	local data = libB.json.decode(input_data)
+	local dna_ng = libB.json.decode(DATA[data["script_id"]][data["data_id"]])
+	if dna_ng["ng_per_ul"] > 25 then
+        return 0, "High DNA concentration", "", "", ""
+    else
+        return 1, "Low DNA concentration", "", "", ""
+    end
+end
+<lua_script>
+
+### EOT ###
+
+### ASSISTANT (tool) ###
+tool:
+Protocol started with step ID: 14
+Status: 2
+Comment: PCR, then quantify DNA
+### EOT ###
+
+### USER ###
+The protocol failed with a low DNA concentration. Can you figure out why?
+
+### EOT ###
+
+### ASSISTANT ###
+<thinking>
+After doing PCR, we expect there should be double stranded DNA that we can quantify at a relatively high concentration (above 25ng per uL). But we do not observe that. What could be going wrong?
+
+A good first test would be the primer melting temperature. Let's check the primer melting temperatures.
+</thinking>
+<lua_sandbox>
+local primers = libB.primers
+local m13fwd = "GTAAAACGACGGCCAGT"
+local m13rev = "CAGGAAACAGCTATGAC"
+local m13fwd_temp = primers.melting_temp(m13fwd)
+local m13rev_temp = primers.melting_temp(m13rev)
+
+-- We get the print statements as output from the sandbox, so print the values.
+print(string.format("M13 Forward Temp: %.1f°C", m13fwd_temp))
+print(string.format("M13 Reverse Temp: %.1f°C", m13rev_temp))
+</lua_sandbox>
+### EOT ###
+
+### ASSISTANT (tool) ###
+tool:
+M13 Forward Temp: 52.6°C
+M13 Reverse Temp: 47.0°C
+
+### EOT ###
+
+### ASSISTANT ###
+<thinking>
+It appears that the melting temperature is too high. I'll rewrite the script with a different melting temperature to match my calculations.
+</thinking>
+<lua_script>
+-- main sets up the PCR reaction, then passes outputs to process_dna
+local function main()
+	local script_id = libB.uuid.generate()
+	local script = libB.Script.new(script_id)
+
+	-- Opentrons code
+	local opentrons_commands = libB.OpentronsCommands.new()
+	local pipette = { pipette = "p20_single_gen2", side = "right" }
+	local tips = libB.Labware.new("opentrons_96_tiprack_20ul", "1")
+    local source = libB.Labware.new("opentrons_24_tuberack_nest_1.5ml_snapcap", "2")
+    local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
+
+	opentrons_commands:home()
+	local operations = {
+	    {tip = "A1", source = "A1", volume = 10}, -- 2x mastermix means 10uL mastermix for 20uL reaction
+	    {tip = "B1", source = "B1", volume = 2}, -- 1uL per 10uL means 2uL primers for 20uL reaction
+	    {tip = "C1", source = "C1", volume = 1}, -- only need 1uL of template
+	    {tip = "D1", source = "D1", volume = 7} -- 10 + 2 + 1 = 13, so I need 7uL of water to bring it to 20uL
+	}
+	for _, op in ipairs(operations) do
+	    opentrons_commands
+	        :pick_up_tip(pipette, tips:well(op.tip))
+	        :aspirate(pipette, op.volume, source:well(op.source))
+	        :dispense(pipette, op.volume, destination:well("A1"))
+	        :drop_tip(pipette)
+	end
+	opentrons_commands:home()
+	opentrons_commands -- this sets up the PCR reaction
+		:tc_open_lid()
+    	:tc_set_lid_temp(100)
+    	:tc_execute_profile({
+    	    { temperature = 95, hold_time_seconds = 30 },
+    	    { temperature = 47, hold_time_seconds = 30 },
+    	    { temperature = 72, hold_time_seconds = 60 }
+    	}, 30, 20)
+    	:tc_deactivate_block()
+    	:tc_deactivate_lid()
+
+	-- Human code
+	local human_commands = HumanCommands.new()
+	local data_id = libB.uuid.generate()
+	human_commands:quantify(data_id, destination.labware, destination.deck_slot, "A1")
+
+	-- Update script
+	script:add_commands(opentrons_commands)
+	script:add_commands(human_commands)
+	local script_json = script:to_json()
+
+	-- Define what data we want to retrieve later
+    local data = libB.json.encode({
+        script_id = script_id,
+        data_id = data_id
+    })
+
+	return 2, "PCR, then quantify DNA (2nd attempt)", "process_results", script_json, data
+end
+
+function process_results(input_data)
+	local data = libB.json.decode(input_data)
+	local dna_ng = libB.json.decode(DATA[data["script_id"]][data["data_id"]])
+	if dna_ng["ng_per_ul"] > 25 then
+        return 0, "High DNA concentration", "", "", ""
+    else
+        return 1, "Low DNA concentration", "", "", ""
+    end
+end
+<lua_script>
+
+### EOT ###
+
+### ASSISTANT (tool) ###
+Protocol started with step ID: 16
+Status: 2
+Comment: PCR, then quantify DNA (2nd attempt)
+
+### EOT ###
+
+### USER ###
+Looks like it worked! Thank you!
+### EOT ###
+
+### ASSISTANT ###
+Happy to help!
+### EOT ###
 `
 
 var upgrader = websocket.Upgrader{
@@ -371,7 +600,6 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 			if strings.Contains(lastMsg, "<lua_script>") {
 				output := app.executeLuaScript(r.Context(), id, lastMsg)
-				fmt.Println(output)
 				toolMsg := fmt.Sprintf("tool:\n%s", output)
 
 				messages = append(messages, openai.ChatCompletionMessage{
@@ -379,6 +607,7 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 					Content: toolMsg,
 				})
 
+				_ = conn.WriteMessage(messageType, []byte("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n"))
 				err = conn.WriteMessage(messageType, []byte(toolMsg))
 				if err != nil {
 					log.Printf("Failed to write tool output: %v", err)
@@ -389,6 +618,7 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			// Normal message flow - stream LLM response
 			for {
 				// Stream the LLM response
+				_ = conn.WriteMessage(messageType, []byte("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n"))
 				stream, err := client.CreateChatCompletionStream(
 					context.Background(),
 					openai.ChatCompletionRequest{
@@ -447,7 +677,6 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 					_ = conn.WriteMessage(messageType, []byte(toolMsg))
 
 					// Continue the loop to get another LLM response
-					_ = conn.WriteMessage(messageType, []byte("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n%s"))
 					continue
 				}
 
@@ -456,7 +685,6 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Add user header and save context
 		userHeader := "\n<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n"
 		err = conn.WriteMessage(messageType, []byte(userHeader))
 		if err != nil {
@@ -464,7 +692,7 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fullContext := constructConversationContext(messages)
+		fullContext := constructConversationContext(messages) + userHeader
 		id, _, err = writeDB.AddMessageHistory(r.Context(), projectID, fullContext)
 		if err != nil {
 			log.Printf("Failed to save message history: %v", err)
@@ -513,7 +741,6 @@ func (app *App) executeLuaScript(ctx context.Context, historyID int64, msg strin
 
 	scriptCode := msg[scriptStartIndex+len(scriptPrefix) : scriptStartIndex+len(scriptPrefix)+scriptEndIndex]
 
-	fmt.Println(historyID)
 	err := app.Runner.StartProtocol(ctx, historyID, scriptCode)
 	if err != nil {
 		return fmt.Sprintf("Failed to start protocol: %s", err.Error())
@@ -557,9 +784,9 @@ func constructConversationContext(messages []openai.ChatCompletionMessage) strin
 		}
 
 		result.WriteString(msg.Content)
+		// result.WriteString("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n")
 	}
 
-	result.WriteString("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n")
 	return result.String()
 }
 

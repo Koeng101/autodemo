@@ -3,17 +3,13 @@
     <meta charset="UTF-8">
     <title>LuaLLM</title>
     <style>
-        /* Add responsive container styles */
         .chat-container {
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
         }
 
-        /* Style the chat output area */
         #chat {
-            white-space: pre-wrap;       /* Preserves whitespace and wraps text */
-            word-wrap: break-word;       /* Breaks long words */
             background-color: #f5f5f5;
             border: 1px solid #ddd;
             border-radius: 4px;
@@ -24,7 +20,30 @@
             overflow-y: auto;
         }
 
-        /* Style the input area */
+        .message-bubble {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border-radius: 8px;
+            padding: 10px;
+            margin: 10px 0;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+        .message-bubble.assistant {
+            background-color: #E3F2FD;  /* Light blue for assistant */
+            border: 1px solid #BBDEFB;
+        }
+
+        .message-bubble.system {
+            background-color: #F1F8E9;  /* Light green for system */
+            border: 1px solid #DCEDC8;
+        }
+
+        .message-bubble.user {
+            background-color: #FFF3E0;  /* Light orange for user */
+            border: 1px solid #FFE0B2;
+        }
+
         #message {
             width: 100%;
             max-width: 100%;
@@ -35,7 +54,6 @@
             border-radius: 4px;
         }
 
-        /* Style the button */
         #send {
             padding: 8px 16px;
             background-color: #4CAF50;
@@ -50,67 +68,57 @@
         }
     </style>
     <script>
-		function checkStatus() {
-	    // Extract project ID from URL path
-	    const projectID = window.location.pathname.split('/')[2];
-	    
-	    fetch('/status/' + projectID)
-	        .then(response => response.json())
-	        .then(steps => {
-	            // Create or get status div
-	            let statusDiv = document.getElementById('status');
-	            if (!statusDiv) {
-	                statusDiv = document.createElement('div');
-	                statusDiv.id = 'status';
-	                document.querySelector('.chat-container').insertBefore(
-	                    statusDiv,
-	                    document.getElementById('chat')
-	                );
-	            }
-	
-	            // Clear previous status
-	            statusDiv.innerHTML = '';
-	
-	            // Display each step's status
-	            steps.forEach(step => {
-	                const stepEl = document.createElement('div');
-	                stepEl.style.padding = '10px';
-	                stepEl.style.margin = '5px';
-	                stepEl.style.border = '1px solid #ccc';
-	
-	                // Set color based on status
-	                switch(step.Status) {
-	                    case 0: // Complete
-	                        stepEl.style.backgroundColor = '#90EE90';
-	                        break;
-	                    case 1: // Failure
-	                        stepEl.style.backgroundColor = '#FFB6C1';
-	                        break;
-	                    case 2: // Continuation
-	                        stepEl.style.backgroundColor = '#FFD700';
-	                        break;
-	                }
-	
-	                stepEl.textContent = `${step.StepComment} (Status: ${step.Status})`;
-	                statusDiv.appendChild(stepEl);
-	            });
-	        })
-	        .catch(console.error);
-	}
-	
-	// Check status every 5 seconds
-	setInterval(checkStatus, 5000);
+        function checkStatus() {
+            const projectID = window.location.pathname.split('/')[2];
+            
+            fetch('/status/' + projectID)
+                .then(response => response.json())
+                .then(steps => {
+                    let statusDiv = document.getElementById('status');
+                    if (!statusDiv) {
+                        statusDiv = document.createElement('div');
+                        statusDiv.id = 'status';
+                        document.querySelector('.chat-container').insertBefore(
+                            statusDiv,
+                            document.getElementById('chat')
+                        );
+                    }
 
+                    statusDiv.innerHTML = '';
 
+                    steps.forEach(step => {
+                        const stepEl = document.createElement('div');
+                        stepEl.style.padding = '10px';
+                        stepEl.style.margin = '5px';
+                        stepEl.style.border = '1px solid #ccc';
+
+                        switch(step.Status) {
+                            case 0:
+                                stepEl.style.backgroundColor = '#90EE90';
+                                break;
+                            case 1:
+                                stepEl.style.backgroundColor = '#FFB6C1';
+                                break;
+                            case 2:
+                                stepEl.style.backgroundColor = '#FFD700';
+                                break;
+                        }
+
+                        stepEl.textContent = `${step.StepComment} (Status: ${step.Status})`;
+                        statusDiv.appendChild(stepEl);
+                    });
+                })
+                .catch(console.error);
+        }
+
+        setInterval(checkStatus, 5000);
 
         document.addEventListener('DOMContentLoaded', function() {
-            // Get project ID from URL path
             const projectID = window.location.pathname.substring(1);
             
             var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-            // Include project ID in WebSocket URL
             var wsUrl = protocol + window.location.host + '/' + projectID + '/ws';
-			console.log(wsUrl)
+            console.log(wsUrl)
             var ws = new WebSocket(wsUrl);
 
             var chat = "";
@@ -133,9 +141,39 @@
                     .replace(/'/g, "&#039;");
             }
 
+            function getMessageType(message) {
+                const headerMatch = message.match(/<\|start_header_id\|>(.*?)<\|end_header_id\|>/);
+                return headerMatch ? headerMatch[1] : 'unknown';
+            }
+
+            function removeHeader(message) {
+				const headerMatch = message.match(/<\|start_header_id\|>(.*?)<\|end_header_id\|>/);
+                return message.replace(/<\|start_header_id\|>.*?<\|end_header_id\|>/, headerMatch[1]);
+            }
+
             function renderMessages() {
-                var chatHTML = document.getElementById('chat');
-                chatHTML.innerHTML = escapeHTML(chat);
+                var chatDiv = document.getElementById('chat');
+                chatDiv.innerHTML = ''; // Clear existing messages
+                
+                // Split chat into messages by eot_id token
+                const messages = chat.split('<|eot_id|>');
+                
+                // Create a bubble for each message
+                messages.forEach(message => {
+                    if (message.trim() !== '') {
+                        const bubble = document.createElement('div');
+                        const messageType = getMessageType(message);
+                        bubble.className = `message-bubble ${messageType}`;
+                        
+                        // Remove the header before displaying the message
+                        const cleanMessage = removeHeader(message);
+                        bubble.innerHTML = escapeHTML(cleanMessage.trim());
+                        chatDiv.appendChild(bubble);
+                    }
+                });
+                
+                // Scroll to bottom
+                chatDiv.scrollTop = chatDiv.scrollHeight;
             }
 
             document.getElementById('send').onclick = function() {
@@ -145,7 +183,7 @@
                 input.value = "";
             };
 
-			document.getElementById('execute').onclick = function() {
+            document.getElementById('execute').onclick = function() {
                 ws.send("<|execute|>" + chat);
                 chat = "";
             };
@@ -158,7 +196,7 @@
         <div id="chat"></div>
         <textarea id="message" placeholder="Your message..."></textarea>
         <button id="send">Send</button>
-		<button id="execute">Execute Script</button>
+        <button id="execute">Execute Script</button>
 
         <h2>info</h2>
         <p>The chat contains the entire context window in raw-text (rendered for markdown). Chat completions hides too much of the underlying processing - which is just text completion - and this program is meant to strip that away, so you understand how the LLM works under the hood.</p>
