@@ -171,6 +171,7 @@ function main()
     local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
 
 	opentrons_commands:home()
+	opentrons_commands:tc_open_lid() -- to dispense into, the lid must be open
 	local operations = {
 	    {tip = "A1", source = "A1", volume = 10}, -- 2x mastermix means 10uL mastermix for 20uL reaction
 	    {tip = "B1", source = "B1", volume = 2}, -- 1uL per 10uL means 2uL primers for 20uL reaction
@@ -186,8 +187,8 @@ function main()
 	end
 	opentrons_commands:home()
 	opentrons_commands -- this sets up the PCR reaction
-		:tc_open_lid()
     	:tc_set_lid_temp(100)
+		:tc_close_lid()
     	:tc_execute_profile({
     	    { temperature = 95, hold_time_seconds = 30 },
     	    { temperature = 70, hold_time_seconds = 30 },
@@ -195,6 +196,7 @@ function main()
     	}, 30, 20)
     	:tc_deactivate_block()
     	:tc_deactivate_lid()
+		:tc_open_lid()
 
 	-- Human code
 	local human_commands = libB.HumanCommands.new()
@@ -284,6 +286,7 @@ local function main()
     local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
 
 	opentrons_commands:home()
+	opentrons_commands:tc_open_lid() -- to dispense into, the lid must be open
 	local operations = {
 	    {tip = "A1", source = "A1", volume = 10}, -- 2x mastermix means 10uL mastermix for 20uL reaction
 	    {tip = "B1", source = "B1", volume = 2}, -- 1uL per 10uL means 2uL primers for 20uL reaction
@@ -299,8 +302,8 @@ local function main()
 	end
 	opentrons_commands:home()
 	opentrons_commands -- this sets up the PCR reaction
-		:tc_open_lid()
     	:tc_set_lid_temp(100)
+		:tc_close_lid()
     	:tc_execute_profile({
     	    { temperature = 95, hold_time_seconds = 30 },
     	    { temperature = 47, hold_time_seconds = 30 },
@@ -308,6 +311,7 @@ local function main()
     	}, 30, 20)
     	:tc_deactivate_block()
     	:tc_deactivate_lid()
+		:tc_open_lid()
 
 	-- Human code
 	local human_commands = HumanCommands.new()
