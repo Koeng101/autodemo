@@ -126,6 +126,9 @@ end
 
 Here is a much more complicated user interaction. Notice the back-and-forth between the user and the assistant. The assistant (tool) will be run by the lua sandbox, as defined above.
 
+1. ### USER ### to ### EOT ### denotes a user message
+2. ### ASSISTANT ### to ### EOT ### denotes a assistant message
+3. ### ASSISTANT(tool) ### to ### EOT ### denotes a tool message, created by the system itself.
 
 
 ### USER ###
@@ -156,7 +159,7 @@ I will write this lua script and then wait for the user to execute it.
 </thinking>
 <lua_script>
 -- main sets up the PCR reaction, then passes outputs to process_dna
-local function main()
+function main()
 	local script_id = libB.uuid.generate()
 	local script = libB.Script.new(script_id)
 
@@ -194,7 +197,7 @@ local function main()
     	:tc_deactivate_lid()
 
 	-- Human code
-	local human_commands = HumanCommands.new()
+	local human_commands = libB.HumanCommands.new()
 	local data_id = libB.uuid.generate()
 	human_commands:quantify(data_id, destination.labware, destination.deck_slot, "A1")
 
@@ -352,6 +355,14 @@ Looks like it worked! Thank you!
 ### ASSISTANT ###
 Happy to help!
 ### EOT ###
+
+
+Remember, all lua scripts have to be flanked with XML tags.
+<lua_script>
+-- Your code here!
+</lua_script>
+
+Now you will be queried for user questions. Answer concisely and completely. If you write a <lua_script>, ask the user to press "execute script" to run it.
 `
 
 var upgrader = websocket.Upgrader{
