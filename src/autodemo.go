@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/template"
 
 	"golang.org/x/sync/errgroup"
 
@@ -395,6 +396,7 @@ func InitializeApp(dbLocation string) *App {
 	app.Router.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "upload.html")
 	})
+	app.Router.HandleFunc("/backend/{codestep}", app.CodeStepHandler)
 
 	// Initialize database
 	writeDB, err := sql.Open("sqlite3", dbLocation)
@@ -839,6 +841,89 @@ func parseToMessages(input string) []openai.ChatCompletionMessage {
 	}
 
 	return messages
+}
+
+/******************************************************************************
+
+Technician backend
+
+******************************************************************************/
+
+// CommandGroup represents a group of commands of the same type
+type CommandGroupDisplay struct {
+	Type string
+	JSON string
+}
+
+// TemplateData holds the data for the template
+type CodeStepTemplateData struct {
+	StepID        int64
+	ScriptID      string
+	CommandGroups []CommandGroupDisplay
+}
+
+//go:embed codestep.html
+var codeStepHtml string
+var codeStepTemplate = template.Must(template.New("codestep").Parse(codeStepHtml))
+
+// CodeStepHandler handles the display of code step details
+func (app *App) CodeStepHandler(w http.ResponseWriter, r *http.Request) {
+	// Get code step ID from URL
+	stepIDStr := r.PathValue("codestep")
+	if stepIDStr == "" {
+		http.Error(w, "Code step ID required", http.StatusBadRequest)
+		return
+	}
+
+	stepID, err := strconv.ParseInt(stepIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid code step ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get code step data
+	queries := autodemosql.New(app.DB)
+	step, err := queries.GetCodeStep(r.Context(), stepID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error getting code step: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Parse the script JSON
+	var script libb.Script
+	if err := json.Unmarshal([]byte(step.Script), &script); err != nil {
+		http.Error(w, fmt.Sprintf("Error parsing script JSON: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Prepare template data
+	templateData := CodeStepTemplateData{
+		StepID:   stepID,
+		ScriptID: script.ID,
+	}
+
+	// Process each command group
+	for _, cmdGroup := range script.Commands {
+		// Convert the command group to JSON
+		cmdJSON, err := json.MarshalIndent(cmdGroup, "", "    ")
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error encoding command group: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		displayGroup := CommandGroupDisplay{
+			Type: cmdGroup.CommandType,
+			JSON: string(cmdJSON),
+		}
+		templateData.CommandGroups = append(templateData.CommandGroups, displayGroup)
+	}
+
+	// Execute embedded template
+	w.Header().Set("Content-Type", "text/html")
+	if err := codeStepTemplate.Execute(w, templateData); err != nil {
+		http.Error(w, fmt.Sprintf("Error executing template: %v", err), http.StatusInternalServerError)
+		return
+	}
 }
 
 /******************************************************************************
