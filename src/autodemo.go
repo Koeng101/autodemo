@@ -187,8 +187,8 @@ function main()
 	end
 	opentrons_commands:home()
 	opentrons_commands -- this sets up the PCR reaction
-    	:tc_set_lid_temp(100)
 		:tc_close_lid()
+    	:tc_set_lid_temp(100)
     	:tc_execute_profile({
     	    { temperature = 95, hold_time_seconds = 30 },
     	    { temperature = 70, hold_time_seconds = 30 },
@@ -302,8 +302,8 @@ local function main()
 	end
 	opentrons_commands:home()
 	opentrons_commands -- this sets up the PCR reaction
-    	:tc_set_lid_temp(100)
 		:tc_close_lid()
+    	:tc_set_lid_temp(100)
     	:tc_execute_profile({
     	    { temperature = 95, hold_time_seconds = 30 },
     	    { temperature = 47, hold_time_seconds = 30 },
