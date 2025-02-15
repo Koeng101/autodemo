@@ -3,6 +3,7 @@
 autodemo is an demo of a cloud lab + lab computing environment + LLM integration built by Keoni Gandall. I mean this to demonstrate some ideas I have about how biological cloud labs should work in the future.
 
 [![Demo of Autodemo](https://img.youtube.com/vi/BEUKxsUfO9w/0.jpg)](https://youtu.be/BEUKxsUfO9w)
+[Gist of full repo code to copy paste into an LLM to ask questions about it](https://gist.github.com/Koeng101/17a43a6e1511522e888fb02fdf050ba6)
 
 The core concepts are fairly simple:
 1. Have a cloud lab that can be used with JSON, or a simple standard interface
