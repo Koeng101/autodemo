@@ -138,12 +138,12 @@ M13_reverse	CAGGAAACAGCTATGAC
 
 That I will be using to a PCR a plasmid. I want you to setup that PCR, then validate that I get more than 25ng of DNA out of a qubit quantification reaction, to make sure it worked.
 
-On the robot deck I currently have a opentrons_96_tiprack_20ul tipbox at 1, a opentrons_24_tuberack_nest_1.5ml_snapcap at 2, and nest_96_wellplate_100ul_pcr_full_skirt on my thermocycler at 7. In A1 of the tuberack is mastermix, B1 is the primer mix of M13_forward and M13_reverse, C1 has template, and D1 has water. These are the resources you'll be programming for. It is a 2x mastermix, 1uL of primer is needed per 10uL, and 1uL of template in total.
+On the robot deck I currently have an opentrons_96_tiprack_20ul tipbox at 1, an opentrons_24_tuberack_generic_2ml_screwcap at 2, and a nest_96_wellplate_100ul_pcr_full_skirt on my thermocycler at 7. In A1 of the tuberack is mastermix, B1 is the primer mix of M13_forward and M13_reverse, C1 has template, and D1 has water. These are the resources you'll be programming for. It is a 2x mastermix, 1uL of primer is needed per 10uL, and 1uL of template in total.
 
 Here are the conditions that I want you to initially try:
-95c 30s
+94c 30s
 70c 30s
-72c 60s
+68c 60s
 30x
 20uL reaction: taq polymerase
 
@@ -167,7 +167,7 @@ function main()
 	local opentrons_commands = libB.OpentronsCommands.new()
 	local pipette = { pipette = "p20_single_gen2", side = "right" }
 	local tips = libB.Labware.new("opentrons_96_tiprack_20ul", "1")
-    local source = libB.Labware.new("opentrons_24_tuberack_nest_1.5ml_snapcap", "2")
+    local source = libB.Labware.new("opentrons_24_tuberack_generic_2ml_screwcap", "2")
     local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
 
 	opentrons_commands:home()
@@ -190,9 +190,9 @@ function main()
 		:tc_close_lid()
     	:tc_set_lid_temp(100)
     	:tc_execute_profile({
-    	    { temperature = 95, hold_time_seconds = 30 },
+    	    { temperature = 94, hold_time_seconds = 30 },
     	    { temperature = 70, hold_time_seconds = 30 },
-    	    { temperature = 72, hold_time_seconds = 60 }
+    	    { temperature = 68, hold_time_seconds = 60 }
     	}, 30, 20)
     	:tc_deactivate_block()
     	:tc_deactivate_lid()
@@ -240,13 +240,10 @@ Comment: PCR, then quantify DNA
 ### USER ###
 The protocol failed with a low DNA concentration. Can you figure out why?
 
-### EOT ###
-
-### ASSISTANT ###
 <thinking>
 After doing PCR, we expect there should be double stranded DNA that we can quantify at a relatively high concentration (above 25ng per uL). But we do not observe that. What could be going wrong?
 
-A good first test would be the primer melting temperature. Let's check the primer melting temperatures.
+A good first test would be the primer melting temperature. Let's check the primer melting temperatures. Remember, we want to use the lua sandbox with <lua_sandbox></lua_sandbox>, not the lua scripting environment with <lua_script>
 </thinking>
 <lua_sandbox>
 local primers = libB.primers
@@ -282,7 +279,7 @@ local function main()
 	local opentrons_commands = libB.OpentronsCommands.new()
 	local pipette = { pipette = "p20_single_gen2", side = "right" }
 	local tips = libB.Labware.new("opentrons_96_tiprack_20ul", "1")
-    local source = libB.Labware.new("opentrons_24_tuberack_nest_1.5ml_snapcap", "2")
+    local source = libB.Labware.new("opentrons_24_tuberack_generic_2ml_screwcap", "2")
     local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
 
 	opentrons_commands:home()
@@ -305,9 +302,9 @@ local function main()
 		:tc_close_lid()
     	:tc_set_lid_temp(100)
     	:tc_execute_profile({
-    	    { temperature = 95, hold_time_seconds = 30 },
+    	    { temperature = 94, hold_time_seconds = 30 },
     	    { temperature = 47, hold_time_seconds = 30 },
-    	    { temperature = 72, hold_time_seconds = 60 }
+    	    { temperature = 68, hold_time_seconds = 60 }
     	}, 30, 20)
     	:tc_deactivate_block()
     	:tc_deactivate_lid()
