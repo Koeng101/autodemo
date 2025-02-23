@@ -7,6 +7,8 @@ github.com/koeng101/libB/src/c v0.0.0-20250223000710-e7248cc27d99 h1:XzrSZ+9fNQc
 github.com/koeng101/libB/src/c v0.0.0-20250223000710-e7248cc27d99/go.mod h1:gAmPMJwoPigRbTu1JrTgI73pRIvpwlnPcLUeuqAP7qw=
 github.com/koeng101/libB/src/c v0.0.0-20250223041532-7347b6b1d8fa h1:9gQOCTMSsXO+g15AB0QQCmiSPtMnDe1SEAsjaevL31c=
 github.com/koeng101/libB/src/c v0.0.0-20250223041532-7347b6b1d8fa/go.mod h1:gAmPMJwoPigRbTu1JrTgI73pRIvpwlnPcLUeuqAP7qw=
+github.com/koeng101/libB/src/c v0.0.0-20250223231947-5d41c5383e6f h1:KuePcfcN5tyaDupPm5kJIV0eWOZKBZ/+SkCCmhOiBZg=
+github.com/koeng101/libB/src/c v0.0.0-20250223231947-5d41c5383e6f/go.mod h1:gAmPMJwoPigRbTu1JrTgI73pRIvpwlnPcLUeuqAP7qw=
 github.com/ncruces/go-sqlite3 v0.22.0 h1:FkGSBhd0TY6e66k1LVhyEpA+RnG/8QkQNed5pjIk4cs=
 github.com/ncruces/go-sqlite3 v0.22.0/go.mod h1:ueXOZXYZS2OFQirCU3mHneDwJm5fGKHrtccYBeGEV7M=
 github.com/ncruces/julianday v1.0.0 h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt7M=

@@ -9,11 +9,9 @@ import (
 )
 
 type Attachment struct {
-	ID                      int64
-	ProjectMessageHistoryID int64
-	Filename                string
-	Content                 string
-	CreatedAt               int64
+	Filename  string
+	Content   string
+	CreatedAt int64
 }
 
 type Code struct {

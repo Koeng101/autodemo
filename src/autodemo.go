@@ -49,325 +49,212 @@ the lab.
 
 ******************************************************************************/
 
-var LuaPrompt = `You are a helpful assistant writing biological code. Can do this in two ways: sandbox mode, or script mode. In sandbox mode, you can answer simple queries from the user using code. You should do math with this.
+var LuaPrompt = `You are a helpful assistant writing biological code, executed in lua.
+
+===============================================================================
 
 user: What is 8+8?
 assistant: <lua_sandbox>
+return 8+8
 print(8+8)
 </lua_sandbox>
 tool: 16
 
+===============================================================================
+
 user: How many base pairs are in "ATGC"?
 assistant: <lua_sandbox>
-print(#"ATGC")
+return #"ATGC"
 <lua_sandbox>
-tool: 4
 
-The script mode is the one for creating biological protocols. It is more advanced, and comes preloaded with the libB library. Here is some example usage:
+===============================================================================
 
-user: Home my robot for me
-assistant: <lua_script>
-function main() -- scripts always initiate at main
-	-- setup script
-	local script_id = libB.uuid.generate()
-	local script = libB.Script.new(script_id)
+user: Can you align these two sequences?
 
-	-- setup opentrons commands
-	local commands = libB.OpentronsCommands.new()
-	commands:home()
-	script:add_commands(commands)
+ATCGTAGCTACGATCGATCGTAGCTAGCTACGATCGTAGCTAGCTACG
+GCTATCGATCGTACGATCGTAGCTACGTACGATCGTAGCTAGCTAGCT
 
-	-- there are always 5 returns from scripts:
-	-- 1. a status code: 0 for success, 1 for failure, and 2 for continuation
-	-- 2. a comment for the user
-	-- 3. the next function to run (may be blank)
-	-- 4. the script json
-	-- 5. data to be passed into the next function
-	return 0, "Homing the robot", "", script:to_json(), ""
-end
-</lua_script>
-
-Here is a more complicated example with data processing. You can see how data is passed between functions. The main script returns "process_dna", which is the next function. The system will wait until we have input data to initiate the next function.
-
-user: Quantify the amount of DNA from A1 of deck slot 7 (which is a nest_96_wellplate_100ul_pcr_full_skirt). Tell me if it has a low or high concentration (above 25 is high, below 25 is low).
-assistant: <lua_script>
-function main()
-    local script_id = libB.uuid.generate()
-    local data_id = libB.uuid.generate()
-
-    local script = libB.Script.new(script_id)
-    local human_commands = libB.HumanCommands.new()
-    human_commands:quantify(data_id, "nest_96_wellplate_100ul_pcr_full_skirt", "7", "A1")
-    script:add_commands(human_commands)
-    local script_json = script:to_json()
-
-    -- Define what data we want to retrieve later
-    local data = libB.json.encode({
-        script_id = script_id,
-        data_id = data_id
-    })
-
-    return 2, "Requesting DNA quantification in well", "process_dna", script_json, data
-end
-
-function process_dna(input_data)
-    local data = libB.json.decode(input_data)
-    -- Now we can directly use the data table since keys match our DATA structure
-    local dna_ng = libB.json.decode(DATA[data["script_id"]][data["data_id"]])
-    if dna_ng["ng_per_ul"] > 25 then
-        return 0, "High DNA concentration", "", "", ""
-    else
-        return 1, "Low DNA concentration", "", "", ""
-    end
-end
-</lua_script>
-
-
-
-Here is a much more complicated user interaction. Notice the back-and-forth between the user and the assistant. The assistant (tool) will be run by the lua sandbox, as defined above.
-
-1. ### USER ### to ### EOT ### denotes a user message
-2. ### ASSISTANT ### to ### EOT ### denotes a assistant message
-3. ### ASSISTANT(tool) ### to ### EOT ### denotes a tool message, created by the system itself.
-
-
-### USER ###
-I am trying to validate a PCR reaction. I have two primers:
-M13_forward	GTAAAACGACGGCCAGT
-M13_reverse	CAGGAAACAGCTATGAC
-
-That I will be using to a PCR a plasmid. I want you to setup that PCR, then validate that I get more than 25ng of DNA out of a qubit quantification reaction, to make sure it worked.
-
-On the robot deck I currently have a opentrons_96_tiprack_20ul tipbox at 1, a opentrons_24_tuberack_nest_1.5ml_snapcap at 2, and nest_96_wellplate_100ul_pcr_full_skirt on my thermocycler at 7. In A1 of the tuberack is mastermix, B1 is the primer mix of M13_forward and M13_reverse, C1 has template, and D1 has water. These are the resources you'll be programming for. It is a 2x mastermix, 1uL of primer is needed per 10uL, and 1uL of template in total.
-
-Here are the conditions that I want you to initially try:
-95c 30s
-70c 30s
-72c 60s
-30x
-20uL reaction: taq polymerase
-
-### EOT ###
-
-### ASSISTANT ###
-<thinking>
-The user wants to do a PCR reaction followed by a quantification reaction. This will require me to create a script to run a PCR reaction on an opentrons, then have a human technician quantify the DNA.
-
-The user has not specified the DNA quantity, but 25ng is a decent cutoff point for PCR.
-
-I will write this lua script and then wait for the user to execute it.
-</thinking>
-<lua_script>
--- main sets up the PCR reaction, then passes outputs to process_dna
-function main()
-	local script_id = libB.uuid.generate()
-	local script = libB.Script.new(script_id)
-
-	-- Opentrons code
-	local opentrons_commands = libB.OpentronsCommands.new()
-	local pipette = { pipette = "p20_single_gen2", side = "right" }
-	local tips = libB.Labware.new("opentrons_96_tiprack_20ul", "1")
-    local source = libB.Labware.new("opentrons_24_tuberack_nest_1.5ml_snapcap", "2")
-    local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
-
-	opentrons_commands:home()
-	opentrons_commands:tc_open_lid() -- to dispense into, the lid must be open
-	local operations = {
-	    {tip = "A1", source = "A1", volume = 10}, -- 2x mastermix means 10uL mastermix for 20uL reaction
-	    {tip = "B1", source = "B1", volume = 2}, -- 1uL per 10uL means 2uL primers for 20uL reaction
-	    {tip = "C1", source = "C1", volume = 1}, -- only need 1uL of template
-	    {tip = "D1", source = "D1", volume = 7} -- 10 + 2 + 1 = 13, so I need 7uL of water to bring it to 20uL
-	}
-	for _, op in ipairs(operations) do
-	    opentrons_commands
-	        :pick_up_tip(pipette, tips:well(op.tip))
-	        :aspirate(pipette, op.volume, source:well(op.source))
-	        :dispense(pipette, op.volume, destination:well("A1"))
-	        :drop_tip(pipette)
-	end
-	opentrons_commands:home()
-	opentrons_commands -- this sets up the PCR reaction
-    	:tc_set_lid_temp(100)
-		:tc_close_lid()
-    	:tc_execute_profile({
-    	    { temperature = 95, hold_time_seconds = 30 },
-    	    { temperature = 70, hold_time_seconds = 30 },
-    	    { temperature = 72, hold_time_seconds = 60 }
-    	}, 30, 20)
-    	:tc_deactivate_block()
-    	:tc_deactivate_lid()
-		:tc_open_lid()
-
-	-- Human code
-	local human_commands = libB.HumanCommands.new()
-	local data_id = libB.uuid.generate()
-	human_commands:quantify(data_id, destination.labware, destination.deck_slot, "A1")
-
-	-- Update script
-	script:add_commands(opentrons_commands)
-	script:add_commands(human_commands)
-	local script_json = script:to_json()
-
-	-- Define what data we want to retrieve later
-    local data = libB.json.encode({
-        script_id = script_id,
-        data_id = data_id
-    })
-
-	return 2, "PCR, then quantify DNA", "process_results", script_json, data
-end
-
-function process_results(input_data)
-	local data = libB.json.decode(input_data)
-	local dna_ng = libB.json.decode(DATA[data["script_id"]][data["data_id"]])
-	if dna_ng["ng_per_ul"] > 25 then
-        return 0, "High DNA concentration", "", "", ""
-    else
-        return 1, "Low DNA concentration", "", "", ""
-    end
-end
-<lua_script>
-
-### EOT ###
-
-### ASSISTANT (tool) ###
-tool:
-Protocol started with step ID: 14
-Status: 2
-Comment: PCR, then quantify DNA
-### EOT ###
-
-### USER ###
-The protocol failed with a low DNA concentration. Can you figure out why?
-
-### EOT ###
-
-### ASSISTANT ###
-<thinking>
-After doing PCR, we expect there should be double stranded DNA that we can quantify at a relatively high concentration (above 25ng per uL). But we do not observe that. What could be going wrong?
-
-A good first test would be the primer melting temperature. Let's check the primer melting temperatures.
-</thinking>
+assistant:
 <lua_sandbox>
-local primers = libB.primers
-local m13fwd = "GTAAAACGACGGCCAGT"
-local m13rev = "CAGGAAACAGCTATGAC"
-local m13fwd_temp = primers.melting_temp(m13fwd)
-local m13rev_temp = primers.melting_temp(m13rev)
+seq_a= "ATCGTAGCTACGATCGATCGTAGCTAGCTACGATCGTAGCTAGCTACG"
+seq_b = "GCTATCGATCGTACGATCGTAGCTACGTACGATCGTAGCTAGCTAGCT"
 
--- We get the print statements as output from the sandbox, so print the values.
-print(string.format("M13 Forward Temp: %.1f°C", m13fwd_temp))
-print(string.format("M13 Reverse Temp: %.1f°C", m13rev_temp))
+local alphabet = {"A", "C", "G", "T", "U"}
+local sub_matrix = dnadesign.align.default_matrix
+local scoring = dnadesign.align.new_scoring(sub_matrix, -1)
+local score, align_a, align_b = dnadesign.align.smith_waterman(seq_a, seq_b, scoring)
+return string.format("Score: %d, seq_a alignment: %s, seq_b alignment: %s" score, align_a, align_b)
 </lua_sandbox>
-### EOT ###
 
-### ASSISTANT (tool) ###
-tool:
-M13 Forward Temp: 52.6°C
-M13 Reverse Temp: 47.0°C
+===============================================================================
 
-### EOT ###
+user: Can you optimize this sequence (GFP) for E.coli?
 
-### ASSISTANT ###
-<thinking>
-It appears that the melting temperature is too high. I'll rewrite the script with a different melting temperature to match my calculations.
-</thinking>
-<lua_script>
--- main sets up the PCR reaction, then passes outputs to process_dna
-local function main()
-	local script_id = libB.uuid.generate()
-	local script = libB.Script.new(script_id)
+MASKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTFSYGVQCFSRYPDHMKRHDFFKSAMPEGYVQERTISFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNYNSHNVYITADKQKNGIKANFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRDHMVLLEFVTAAGITHGMDELYK*
 
-	-- Opentrons code
-	local opentrons_commands = libB.OpentronsCommands.new()
-	local pipette = { pipette = "p20_single_gen2", side = "right" }
-	local tips = libB.Labware.new("opentrons_96_tiprack_20ul", "1")
-    local source = libB.Labware.new("opentrons_24_tuberack_nest_1.5ml_snapcap", "2")
-    local destination = libB.Labware.new("nest_96_wellplate_100ul_pcr_full_skirt", "7", "thermocycler")
+assistant:
+<lua_sandbox>
+local gfp = "MASKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTFSYGVQCFSRYPDHMKRHDFFKSAMPEGYVQERTISFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNYNSHNVYITADKQKNGIKANFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRDHMVLLEFVTAAGITHGMDELYK*"
+local table = dnadesign.codon.default_tables["ecoli"]
+local optimized, _ = table:optimize(gfp)
+return optimized
+</lua_sandbox>
 
-	opentrons_commands:home()
-	opentrons_commands:tc_open_lid() -- to dispense into, the lid must be open
-	local operations = {
-	    {tip = "A1", source = "A1", volume = 10}, -- 2x mastermix means 10uL mastermix for 20uL reaction
-	    {tip = "B1", source = "B1", volume = 2}, -- 1uL per 10uL means 2uL primers for 20uL reaction
-	    {tip = "C1", source = "C1", volume = 1}, -- only need 1uL of template
-	    {tip = "D1", source = "D1", volume = 7} -- 10 + 2 + 1 = 13, so I need 7uL of water to bring it to 20uL
-	}
-	for _, op in ipairs(operations) do
-	    opentrons_commands
-	        :pick_up_tip(pipette, tips:well(op.tip))
-	        :aspirate(pipette, op.volume, source:well(op.source))
-	        :dispense(pipette, op.volume, destination:well("A1"))
-	        :drop_tip(pipette)
-	end
-	opentrons_commands:home()
-	opentrons_commands -- this sets up the PCR reaction
-    	:tc_set_lid_temp(100)
-		:tc_close_lid()
-    	:tc_execute_profile({
-    	    { temperature = 95, hold_time_seconds = 30 },
-    	    { temperature = 47, hold_time_seconds = 30 },
-    	    { temperature = 72, hold_time_seconds = 60 }
-    	}, 30, 20)
-    	:tc_deactivate_block()
-    	:tc_deactivate_lid()
-		:tc_open_lid()
+===============================================================================
 
-	-- Human code
-	local human_commands = HumanCommands.new()
-	local data_id = libB.uuid.generate()
-	human_commands:quantify(data_id, destination.labware, destination.deck_slot, "A1")
+user: Can you fix the following sequence to remove GGTCTC sites? Use an ecoli codon table.
 
-	-- Update script
-	script:add_commands(opentrons_commands)
-	script:add_commands(human_commands)
-	local script_json = script:to_json()
+ATGAGTATTCAACATTTCCGTGTCGCCCTTATTCCCTTTTTTGCGGCATTTTGCCTTCCTGTTTTTGCTCACCCAGAAACGCTGGTGAAAGTAAAAGATGCTGAAGATCAGTTGGGTGCACGAGTGGGTTACATCGAACTGGATCTCAACAGCGGTAAGATCCTTGAGAGTTTTCGCCCCGAAGAACGTTTTCCAATGATGAGCACTTTTAAAGTTCTGCTATGTGGCGCGGTATTATCCCGTATTGACGCCGGGCAAGAGCAACTCGGTCGCCGCATACACTATTCTCAGAATGACTTGGTTGAGTACTCACCAGTCACAGAAAAGCATCTTACGGATGGCATGACAGTAAGAGAATTATGCAGTGCTGCCATAACCATGAGTGATAACACTGCGGCCAACTTACTTCTGACAACGATCGGAGGACCGAAGGAGCTAACCGCTTTTTTGCACAACATGGGGGATCATGTAACTCGCCTTGATCGTTGGGAACCGGAGCTGAATGAAGCCATACCAAACGACGAGCGTGACACCACGATGCCTGTAGCAATGGCAACAACGTTGCGCAAACTATTAACTGGCGAACTACTTACTCTAGCTTCCCGGCAACAATTAATAGACTGGATGGAGGCGGATAAAGTTGCAGGACCACTTCTGCGCTCGGCCCTTCCGGCTGGCTGGTTTATTGCTGATAAATCTGGAGCCGGTGAGCGTGGGTCTCGCGGTATCATTGCAGCACTGGGGCCAGATGGTAAGCCCTCCCGTATCGTAGTTATCTACACGACGGGGAGTCAGGCAACTATGGATGAACGAAATAGACAGATCGCTGAGATAGGTGCCTCACTGATTAAGCATTGGTAA
 
-	-- Define what data we want to retrieve later
-    local data = libB.json.encode({
-        script_id = script_id,
-        data_id = data_id
-    })
+assistant:
+<lua_sandbox>
+local sequence = "ATGAGTATTCAACATTTCCGTGTCGCCCTTATTCCCTTTTTTGCGGCATTTTGCCTTCCTGTTTTTGCTCACCCAGAAACGCTGGTGAAAGTAAAAGATGCTGAAGATCAGTTGGGTGCACGAGTGGGTTACATCGAACTGGATCTCAACAGCGGTAAGATCCTTGAGAGTTTTCGCCCCGAAGAACGTTTTCCAATGATGAGCACTTTTAAAGTTCTGCTATGTGGCGCGGTATTATCCCGTATTGACGCCGGGCAAGAGCAACTCGGTCGCCGCATACACTATTCTCAGAATGACTTGGTTGAGTACTCACCAGTCACAGAAAAGCATCTTACGGATGGCATGACAGTAAGAGAATTATGCAGTGCTGCCATAACCATGAGTGATAACACTGCGGCCAACTTACTTCTGACAACGATCGGAGGACCGAAGGAGCTAACCGCTTTTTTGCACAACATGGGGGATCATGTAACTCGCCTTGATCGTTGGGAACCGGAGCTGAATGAAGCCATACCAAACGACGAGCGTGACACCACGATGCCTGTAGCAATGGCAACAACGTTGCGCAAACTATTAACTGGCGAACTACTTACTCTAGCTTCCCGGCAACAATTAATAGACTGGATGGAGGCGGATAAAGTTGCAGGACCACTTCTGCGCTCGGCCCTTCCGGCTGGCTGGTTTATTGCTGATAAATCTGGAGCCGGTGAGCGTGGGTCTCGCGGTATCATTGCAGCACTGGGGCCAGATGGTAAGCCCTCCCGTATCGTAGTTATCTACACGACGGGGAGTCAGGCAACTATGGATGAACGAAATAGACAGATCGCTGAGATAGGTGCCTCACTGATTAAGCATTGGTAA"
+local table = dnadesign.codon.default_tables["ecoli"]
+local fixed_seq, _, _ = dnadesign.fix.cds_simple(bla, table, {"GGTCTC"})
+return fixed_seq
+</lua_sandbox>
 
-	return 2, "PCR, then quantify DNA (2nd attempt)", "process_results", script_json, data
+===============================================================================
+
+user: Can you fragment this gene for synthesis? I'll be making it from oligos with a shortest size of 95bp and largest size of 105bp. Make sure you don't use AAAA as an overhang. Put them into a CSV file.
+
+ATGACCATGATTACGCCAAGCTTGCATGCCTGCAGGTCGACTCTAGAGGATCCCCGGGTACCGAGCTCGAATTCACTGGCCGTCGTTTTACAACGTCGTGACTGGGAAAACCCTGGCGTTACCCAACTTAATCGCCTTGCAGCACATCCCCCTTTCGCCAGCTGGCGTAATAGCGAAGAGGCCCGCACCGATCGCCCTTCCCAACAGTTGCGCAGCCTGAATGGCGAATGGCGCCTGATGCGGTATTTTCTCCTTACGCATCTGTGCGGTATTTCACACCGCATATGGTGCACTCTCAGTACAATCTGCTCTGATGCCGCATAG
+
+assistant:
+<lua_sandbox>
+local gene = "ATGACCATGATTACGCCAAGCTTGCATGCCTGCAGGTCGACTCTAGAGGATCCCCGGGTACCGAGCTCGAATTCACTGGCCGTCGTTTTACAACGTCGTGACTGGGAAAACCCTGGCGTTACCCAACTTAATCGCCTTGCAGCACATCCCCCTTTCGCCAGCTGGCGTAATAGCGAAGAGGCCCGCACCGATCGCCCTTCCCAACAGTTGCGCAGCCTGAATGGCGAATGGCGCCTGATGCGGTATTTTCTCCTTACGCATCTGTGCGGTATTTCACACCGCATATGGTGCACTCTCAGTACAATCTGCTCTGATGCCGCATAG"
+local fragments, _, err = dnadesign.fragment.fragment(gene, 95, 105, {"AAAA"})
+local csv = ""
+for i, fragment in ipairs(fragments) do
+	csv = csv + string.format("%d,%s", i, fragment)
+end
+return csv
+</lua_sandbox>
+
+===============================================================================
+
+user: Can you get the mash distance between these two sequences?
+
+ATGCGATCGATCGATCGATCG
+ATGCGATCGATCGATCGTTCG
+
+assistant:
+<lua_sandbox>
+local mash = dnadesign.mash
+local hash = dnadesign.hash
+local seq1 = "ATGCGATCGATCGATCGATCG"
+local seq2 = "ATGCGATCGATCGATCGTTCG"
+
+-- Create Mash sketches with kmer size 5 and sketch size 10, using CRC32
+local hasher = hash.new_crc32()
+local sketch1 = mash.new(5, 10, hasher)
+local sketch2 = mash.new(5, 10, hasher)
+
+-- Generate sketches
+mash.sketch(sketch1, seq1)
+mash.sketch(sketch2, seq2)
+
+-- Calculate distance
+local distance = mash.distance(sketch1, sketch2)
+</lua_sandbox>
+
+===============================================================================
+
+Here is a complex example that takes many modules into account.
+
+===============================================================================
+
+user: Here is the task:
+
+I've attached my vector, pET21a. I am using the following two primers to linearize it:
+
+pET21fwd,GATCGGTCTCACATTTGTATATCTCCTTCTTAAAGTTAAACAAAATTATTTCTAGAGG
+pET21rev,CTGAGGTCTCGATGTAGATCCGGCTGCTAACAAAGC
+
+I want to insert the following CDS into it using BsaI. Please codon optimize it for e coli, make sure it
+is ready for synthesis (remove homopolymers, BsaI sites, etc), then fragment it for synthesis with an
+agilent oligo pool (max oligo size 174) with a goal of GoldenGating the oligos together. Add M13 fwd and
+M13 rev to those oligos as well, so I can make em doublestranded before GoldenGate. After that, simulate
+the GoldenGate assembly reaction and return to me the completed plasmid and the oligos for synthesizing it.
+
+You'll need to add the A[ATG] overhang to the front of the CDS and ATGT to the end.
+
+cds: MASMTGGQQMGRGSMVFTLEDFVGDWRQTAGYNLDQVLEQGGVSSLFQNLGVSVTPIQRIVLSGENGLKIDIHVIIPYEGLSGDQMGQIEKIFKVVYPVDDHHFKVILHYGTLVIDGVTPNMIDYFGRPYEGIAVFDGKKITVTGTLWNGNKIIDERLINPDGSLLFRVTINGVTGWRLCERILAVDKLAAALEHHHHHH*
+
+Return the plasmid and fragments as fasta.
+
+<documents>
+pET21a.fasta
+</documents>
+
+assistant:
+<lua_sandbox>
+print("importing files")
+local bio = dnadesign.bio
+local fasta = dnadesign.fasta
+local pcr = dnadesign.pcr
+local clone = dnadesign.clone
+local fragment = dnadesign.fragment
+local transform = dnadesign.transform
+
+-- First, let's get the vector sequence.
+-- It is a fasta sequence, so we'll open up a reader on it
+print("getting vector")
+local pET21_vector = ATTACHMENTS["pET21a.fasta"]
+local parser = fasta.new_parser(bio.new_string_reader(pET21_vector), 32*1024)
+local pET21_fasta, _ = parser:next()
+
+print("pcring vector")
+-- Next, let's PCR the vector backbone and simulate digestion with BsaI
+local primers = {"GATCGGTCTCACATTTGTATATCTCCTTCTTAAAGTTAAACAAAATTATTTCTAGAGG", "CTGAGGTCTCGATGTAGATCCGGCTGCTAACAAAGC"}
+local pcr_fragments, _ = pcr.simulate({pET21_fasta.sequence}, 50.0, false, primers)
+local vector_pcr = pcr_fragments[1]
+
+print("optimize+fix gene")
+-- Optimize the gene, and fix it for synthesis (remove BsaI sites)
+local gene = "MASMTGGQQMGRGSMVFTLEDFVGDWRQTAGYNLDQVLEQGGVSSLFQNLGVSVTPIQRIVLSGENGLKIDIHVIIPYEGLSGDQMGQIEKIFKVVYPVDDHHFKVILHYGTLVIDGVTPNMIDYFGRPYEGIAVFDGKKITVTGTLWNGNKIIDERLINPDGSLLFRVTINGVTGWRLCERILAVDKLAAALEHHHHHH*"
+local table = dnadesign.codon.default_tables["ecoli"]
+local optimized_gene, _ = table:optimize(gene)
+local fixed_gene, _, _ = dnadesign.fix.cds_simple(optimized_gene, table, {"GGTCTC"})
+
+print("prep oligos")
+-- Add overhangs onto the gene, then fragment
+local target_gene = "A" .. fixed_gene .. "ATGT"
+local fragments, _, _ = fragment.fragment(target_gene, 160, 174, {"AAAA"})
+
+-- Append M13 primer binding sites and BsaI cut sites to each fragment
+local m13_fwd = "GTAAAACGACGGCCAGT"
+local m13_rev = "CAGGAAACAGCTATGACCATG"
+local bsai_fwd = "GGTCTCT"
+local bsai_rev = "GGTCTCA"
+local full_fragments = {}
+for i, fragment in ipairs(fragments) do
+    full_fragments[i] = m13_fwd .. bsai_fwd .. fragment .. transform.reverse_complement(bsai_rev) .. transform.reverse_complement(m13_rev)
 end
 
-function process_results(input_data)
-	local data = libB.json.decode(input_data)
-	local dna_ng = libB.json.decode(DATA[data["script_id"]][data["data_id"]])
-	if dna_ng["ng_per_ul"] > 25 then
-        return 0, "High DNA concentration", "", "", ""
-    else
-        return 1, "Low DNA concentration", "", "", ""
-    end
+print("gg")
+-- Simulate a GoldenGate assembly
+local parts = {}
+for i, fragment in ipairs(full_fragments) do
+    parts[i] = {sequence = fragment, circular = false}
 end
-<lua_script>
+parts[#parts+1] = {sequence = vector_pcr, circular = false}
+local cloned_plasmid, _, _ = clone.golden_gate(parts, clone.default_enzymes["BsaI"], false)
 
-### EOT ###
+-- Return as fasta
+return_fasta = ""
+for i, oligo in ipairs(full_fragments) do
+	return_fasta = return_fasta .. string.format(">oligo_%d\n", i)  .. oligo .. "\n"
+end
+return_fasta = return_fasta .. string.format(">cloned_plasmid\n%s\n", cloned_plasmid)
+return return_fasta
+</lua_sandbox>
 
-### ASSISTANT (tool) ###
-Protocol started with step ID: 16
-Status: 2
-Comment: PCR, then quantify DNA (2nd attempt)
-
-### EOT ###
-
-### USER ###
-Looks like it worked! Thank you!
-### EOT ###
-
-### ASSISTANT ###
-Happy to help!
-### EOT ###
+===============================================================================
 
 
-Remember, all lua scripts have to be flanked with XML tags.
-<lua_script>
--- Your code here!
-</lua_script>
 
-Now you will be queried for user questions. Answer concisely and completely. If you write a <lua_script>, ask the user to press "execute script" to run it.
-`
+` + "Remember to not use ```lua to start code blocks. Just use the xml <lua_sandbox> and </lua_sandbox> tags."
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024 * 1024 * 16,
@@ -695,7 +582,9 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 					_ = conn.WriteMessage(messageType, []byte(toolMsg))
 
 					// Continue the loop to get another LLM response
-					continue
+					//continue
+					// we disable this cause sequences can be big
+					break
 				}
 
 				// If no sandbox was found, we're done
@@ -735,7 +624,7 @@ func (app *App) executeLuaSandbox(msg string, historyID int64) string {
 
 	// Get attachments from database
 	queries := autodemosql.New(app.DB)
-	attachments, err := queries.GetAttachmentsForMessage(context.Background(), historyID)
+	attachments, err := queries.GetAttachments(context.Background())
 	if err != nil {
 		return fmt.Sprintf("Error getting attachments: %s", err.Error())
 	}
@@ -961,12 +850,6 @@ func (app *App) UploadAttachmentHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	projectID := r.PathValue("projectID")
-	if projectID == "" {
-		http.Error(w, "Project ID required", http.StatusBadRequest)
-		return
-	}
-
 	// Parse JSON body
 	var attachment struct {
 		Filename string `json:"filename"`
@@ -977,16 +860,8 @@ func (app *App) UploadAttachmentHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Get latest message history ID for project
-	queries := autodemosql.New(app.DB)
-	lastMsg, err := queries.GetLastMessageForProject(r.Context(), projectID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	// Create attachment
-	err = app.WDB.CreateAttachment(r.Context(), lastMsg.ID, attachment.Filename, attachment.Content)
+	err := app.WDB.CreateAttachment(r.Context(), attachment.Filename, attachment.Content)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1173,13 +1048,12 @@ func (w *WriteDB) CreateData(ctx context.Context, codeStepID int64, data string)
 	return err
 }
 
-func (w *WriteDB) CreateAttachment(ctx context.Context, messageHistoryID int64, filename string, content string) error {
+func (w *WriteDB) CreateAttachment(ctx context.Context, filename string, content string) error {
 	return w.RunTx(func(db *sql.DB, ctx context.Context) error {
 		queries := autodemosql.New(db)
-		_, err := queries.CreateAttachment(ctx, autodemosql.CreateAttachmentParams{
-			ProjectMessageHistoryID: messageHistoryID,
-			Filename:                filename,
-			Content:                 content,
+		err := queries.CreateAttachment(ctx, autodemosql.CreateAttachmentParams{
+			Filename: filename,
+			Content:  content,
 		})
 		return err
 	})

@@ -22,9 +22,7 @@ CREATE TABLE project_message_history (
 
 -- Add after the code_step table
 CREATE TABLE attachments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_message_history_id INTEGER NOT NULL REFERENCES project_message_history(id),
-    filename TEXT NOT NULL,
+    filename TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
 ) STRICT;

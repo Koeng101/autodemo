@@ -33,23 +33,18 @@ func (q *Queries) AddMessageHistory(ctx context.Context, arg AddMessageHistoryPa
 	return i, err
 }
 
-const createAttachment = `-- name: CreateAttachment :one
-INSERT INTO attachments (project_message_history_id, filename, content) 
-VALUES (?, ?, ?) 
-RETURNING id
+const createAttachment = `-- name: CreateAttachment :exec
+INSERT INTO attachments (filename, content) VALUES (?, ?)
 `
 
 type CreateAttachmentParams struct {
-	ProjectMessageHistoryID int64
-	Filename                string
-	Content                 string
+	Filename string
+	Content  string
 }
 
-func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, createAttachment, arg.ProjectMessageHistoryID, arg.Filename, arg.Content)
-	var id int64
-	err := row.Scan(&id)
-	return id, err
+func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) error {
+	_, err := q.db.ExecContext(ctx, createAttachment, arg.Filename, arg.Content)
+	return err
 }
 
 const createCode = `-- name: CreateCode :one
@@ -143,27 +138,20 @@ func (q *Queries) GetAllStepsForCodeFromProjectHistoryID(ctx context.Context, pr
 	return items, nil
 }
 
-const getAttachmentsForMessage = `-- name: GetAttachmentsForMessage :many
-SELECT id, filename, content FROM attachments 
-WHERE project_message_history_id = ?
+const getAttachments = `-- name: GetAttachments :many
+SELECT filename, content, created_at FROM attachments
 `
 
-type GetAttachmentsForMessageRow struct {
-	ID       int64
-	Filename string
-	Content  string
-}
-
-func (q *Queries) GetAttachmentsForMessage(ctx context.Context, projectMessageHistoryID int64) ([]GetAttachmentsForMessageRow, error) {
-	rows, err := q.db.QueryContext(ctx, getAttachmentsForMessage, projectMessageHistoryID)
+func (q *Queries) GetAttachments(ctx context.Context) ([]Attachment, error) {
+	rows, err := q.db.QueryContext(ctx, getAttachments)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetAttachmentsForMessageRow
+	var items []Attachment
 	for rows.Next() {
-		var i GetAttachmentsForMessageRow
-		if err := rows.Scan(&i.ID, &i.Filename, &i.Content); err != nil {
+		var i Attachment
+		if err := rows.Scan(&i.Filename, &i.Content, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
