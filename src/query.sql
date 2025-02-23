@@ -52,3 +52,12 @@ JOIN code c ON cs.code = c.id
 JOIN project_message_history pmh ON c.project_message_history_id = pmh.id
 WHERE pmh.project_id = ? 
 ORDER BY cs.id DESC;
+
+-- name: CreateAttachment :one
+INSERT INTO attachments (project_message_history_id, filename, content) 
+VALUES (?, ?, ?) 
+RETURNING id;
+
+-- name: GetAttachmentsForMessage :many
+SELECT id, filename, content FROM attachments 
+WHERE project_message_history_id = ?;

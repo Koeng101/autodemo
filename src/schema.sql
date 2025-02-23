@@ -20,6 +20,15 @@ CREATE TABLE project_message_history (
 	content TEXT NOT NULL -- the full message history, with special tokens instead of separate chat messages.
 ) STRICT;
 
+-- Add after the code_step table
+CREATE TABLE attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_message_history_id INTEGER NOT NULL REFERENCES project_message_history(id),
+    filename TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+) STRICT;
+
 -- code always initiates at main
 CREATE TABLE code (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,

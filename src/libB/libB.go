@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	luaeval "github.com/koeng101/libB/src/c"
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -62,36 +63,29 @@ func customPrint(writer io.Writer) func(L *lua.LState) int {
 	}
 }
 
-// ExecuteLua executes the provided Lua code with the compiled libB available
-func ExecuteLua(code string) (string, error) {
-	// First, compile the Teal code to Lua
-	compiledLibB, err := CompileTealToLua()
+// ExecuteLua executes the provided Lua code with any provided attachments
+func ExecuteLua(code string, attachments map[string]string) (string, error) {
+	var fullCode strings.Builder
+
+	// Create ATTACHMENTS table at the start
+	fullCode.WriteString("ATTACHMENTS = {}\n")
+
+	// Add each attachment to the ATTACHMENTS table
+	for name, content := range attachments {
+		fullCode.WriteString(fmt.Sprintf(`ATTACHMENTS[%q] = [==============[%s]==============]
+`, name, content))
+	}
+
+	// Add the actual code
+	fullCode.WriteString(code)
+
+	// Execute using luaeval
+	result, err := luaeval.Eval(fullCode.String())
 	if err != nil {
-		return "", fmt.Errorf("failed to compile libB: %v", err)
+		return "", fmt.Errorf("lua evaluation error: %v", err)
 	}
 
-	L := lua.NewState()
-	defer L.Close()
-
-	// Add stdout
-	var buffer strings.Builder
-	L.SetGlobal("print", L.NewFunction(customPrint(&buffer)))
-
-	// Load the compiled library content
-	if err := L.DoString(compiledLibB); err != nil {
-		return "", fmt.Errorf("failed to load compiled libB: %v", err)
-	}
-
-	// Store returned table as global
-	L.SetGlobal("libB", L.Get(-1))
-	L.Pop(1)
-
-	// Execute the user's code
-	if err := L.DoString(code); err != nil {
-		return "", err
-	}
-
-	return buffer.String(), nil
+	return result, nil
 }
 
 /*

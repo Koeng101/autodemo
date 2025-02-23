@@ -405,6 +405,7 @@ func InitializeApp(dbLocation string) *App {
 	app.Router.HandleFunc("/chat/{projectID}/ws", app.ChatHandler)
 	app.Router.HandleFunc("/status/{projectID}", app.StatusHandler)
 	app.Router.HandleFunc("/upload/{stepID}", app.UploadHandler)
+	app.Router.HandleFunc("/upload_attachment/{projectID}", app.UploadAttachmentHandler)
 	app.Router.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "upload.html")
 	})
@@ -678,7 +679,7 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 				// Check if we got a sandbox to execute
 				if strings.Contains(llmResponse, "<lua_sandbox>") {
-					output := app.executeLuaSandbox(llmResponse)
+					output := app.executeLuaSandbox(llmResponse, id)
 					toolOutput := fmt.Sprintf("tool:\n%s", output)
 					toolMsg := fmt.Sprintf("\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n%s", toolOutput)
 
@@ -714,7 +715,7 @@ func (app *App) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (app *App) executeLuaSandbox(msg string) string {
+func (app *App) executeLuaSandbox(msg string, historyID int64) string {
 	luaPrefix := "<lua_sandbox>"
 	codeSuffix := "</lua_sandbox>"
 
@@ -729,8 +730,21 @@ func (app *App) executeLuaSandbox(msg string) string {
 		return "Error: Could not find lua_sandbox end tag"
 	}
 
+	// Get attachments from database
+	queries := autodemosql.New(app.DB)
+	attachments, err := queries.GetAttachmentsForMessage(context.Background(), historyID)
+	if err != nil {
+		return fmt.Sprintf("Error getting attachments: %s", err.Error())
+	}
+
+	// Convert to map
+	attachmentMap := make(map[string]string)
+	for _, attachment := range attachments {
+		attachmentMap[attachment.Filename] = attachment.Content
+	}
+
 	luaCode := msg[luaStartIndex+len(luaPrefix) : luaStartIndex+len(luaPrefix)+luaEndIndex]
-	output, err := libb.ExecuteLua(luaCode)
+	output, err := libb.ExecuteLua(luaCode, attachmentMap)
 	if err != nil {
 		return fmt.Sprintf("Got error: %s", err.Error())
 	}
@@ -938,6 +952,46 @@ func (app *App) CodeStepHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (app *App) UploadAttachmentHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	projectID := r.PathValue("projectID")
+	if projectID == "" {
+		http.Error(w, "Project ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Parse JSON body
+	var attachment struct {
+		Filename string `json:"filename"`
+		Content  string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&attachment); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Get latest message history ID for project
+	queries := autodemosql.New(app.DB)
+	lastMsg, err := queries.GetLastMessageForProject(r.Context(), projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Create attachment
+	err = app.WDB.CreateAttachment(r.Context(), lastMsg.ID, attachment.Filename, attachment.Content)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 /******************************************************************************
 
 Database/Schema.
@@ -1114,4 +1168,16 @@ func (w *WriteDB) CreateData(ctx context.Context, codeStepID int64, data string)
 		return err
 	})
 	return err
+}
+
+func (w *WriteDB) CreateAttachment(ctx context.Context, messageHistoryID int64, filename string, content string) error {
+	return w.RunTx(func(db *sql.DB, ctx context.Context) error {
+		queries := autodemosql.New(db)
+		_, err := queries.CreateAttachment(ctx, autodemosql.CreateAttachmentParams{
+			ProjectMessageHistoryID: messageHistoryID,
+			Filename:                filename,
+			Content:                 content,
+		})
+		return err
+	})
 }

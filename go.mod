@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/koeng101/libB/src/c v0.0.0-20250223041532-7347b6b1d8fa // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/tetratelabs/wazero v1.8.2 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
