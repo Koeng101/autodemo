@@ -113,87 +113,145 @@
 
         setInterval(checkStatus, 5000);
 
-        document.addEventListener('DOMContentLoaded', function() {
-            const projectID = window.location.pathname.substring(1);
-            
-            var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-            var wsUrl = protocol + window.location.host + '/' + projectID + '/ws';
-            console.log(wsUrl)
-            var ws = new WebSocket(wsUrl);
+document.addEventListener('DOMContentLoaded', function() {
+    const projectID = window.location.pathname.substring(1);
+    
+    var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    var wsUrl = protocol + window.location.host + '/' + projectID + '/ws';
+    console.log(wsUrl)
+    var ws = new WebSocket(wsUrl);
 
-            var chat = "";
+    var chat = "";
 
-            ws.onopen = function() {
-                console.log('Connected to the chat server');
+    // Add these new variables and event handlers here
+    let selectedFiles = new Map();
+
+    document.getElementById('files').onchange = function() {
+        const filesDiv = document.getElementById('selected-files');
+        filesDiv.innerHTML = '';
+        selectedFiles.clear();
+
+        for(let file of this.files) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                selectedFiles.set(file.name, e.target.result);
+                const fileItem = document.createElement('div');
+                fileItem.textContent = file.name;
+                filesDiv.appendChild(fileItem);
             };
+            reader.readAsText(file);
+        }
+    };
 
-            ws.onmessage = function(event) {
-                chat = chat + event.data;
-                renderMessages();
-            };
+    ws.onopen = function() {
+        console.log('Connected to the chat server');
+    };
 
-            function escapeHTML(unsafeText) {
-                return unsafeText
-                    .replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;")
-                    .replace(/"/g, "&quot;")
-                    .replace(/'/g, "&#039;");
-            }
+    ws.onmessage = function(event) {
+        chat = chat + event.data;
+        renderMessages();
+    };
 
-            function getMessageType(message) {
-                const headerMatch = message.match(/<\|start_header_id\|>(.*?)<\|end_header_id\|>/);
-                return headerMatch ? headerMatch[1] : 'unknown';
-            }
+    function escapeHTML(unsafeText) {
+        return unsafeText
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
 
-            function removeHeader(message) {
-				const headerMatch = message.match(/<\|start_header_id\|>(.*?)<\|end_header_id\|>/);
-                return message.replace(/<\|start_header_id\|>.*?<\|end_header_id\|>/, headerMatch[1]);
-            }
+    function getMessageType(message) {
+        const headerMatch = message.match(/<\|start_header_id\|>(.*?)<\|end_header_id\|>/);
+        return headerMatch ? headerMatch[1] : 'unknown';
+    }
 
-            function renderMessages() {
-                var chatDiv = document.getElementById('chat');
-                chatDiv.innerHTML = ''; // Clear existing messages
+    function removeHeader(message) {
+        const headerMatch = message.match(/<\|start_header_id\|>(.*?)<\|end_header_id\|>/);
+        return message.replace(/<\|start_header_id\|>.*?<\|end_header_id\|>/, headerMatch[1]);
+    }
+
+    function renderMessages() {
+        var chatDiv = document.getElementById('chat');
+        chatDiv.innerHTML = ''; // Clear existing messages
+        
+        // Split chat into messages by eot_id token
+        const messages = chat.split('<|eot_id|>');
+        
+        // Create a bubble for each message
+        messages.forEach(message => {
+            if (message.trim() !== '') {
+                const bubble = document.createElement('div');
+                const messageType = getMessageType(message);
+                bubble.className = `message-bubble ${messageType}`;
                 
-                // Split chat into messages by eot_id token
-                const messages = chat.split('<|eot_id|>');
-                
-                // Create a bubble for each message
-                messages.forEach(message => {
-                    if (message.trim() !== '') {
-                        const bubble = document.createElement('div');
-                        const messageType = getMessageType(message);
-                        bubble.className = `message-bubble ${messageType}`;
-                        
-                        // Remove the header before displaying the message
-                        const cleanMessage = removeHeader(message);
-                        bubble.innerHTML = escapeHTML(cleanMessage.trim());
-                        chatDiv.appendChild(bubble);
-                    }
-                });
-                
-                // Scroll to bottom
-                chatDiv.scrollTop = chatDiv.scrollHeight;
+                // Remove the header before displaying the message
+                const cleanMessage = removeHeader(message);
+                bubble.innerHTML = escapeHTML(cleanMessage.trim());
+                chatDiv.appendChild(bubble);
             }
-
-            document.getElementById('send').onclick = function() {
-                var input = document.getElementById('message');
-                ws.send(chat + input.value);
-                chat = "";
-                input.value = "";
-            };
-
-            document.getElementById('execute').onclick = function() {
-                ws.send("<|execute|>" + chat);
-                chat = "";
-            };
         });
+        
+        // Scroll to bottom
+        chatDiv.scrollTop = chatDiv.scrollHeight;
+    }
+
+    document.getElementById('send').onclick = async function() {
+        var input = document.getElementById('message');
+        let message = input.value;
+        
+        // Add attachments XML if files are selected
+        if(selectedFiles.size > 0) {
+            message += '\n<attachments>\n';
+            for(let filename of selectedFiles.keys()) {
+                message += filename + '\n';
+            }
+            message += '</attachments>';
+        }
+
+        // Send message and files
+        ws.send(chat + message);
+        chat = "";
+        input.value = "";
+
+        // If we have files, send them as separate messages
+        if(selectedFiles.size > 0) {
+            const projectID = window.location.pathname.split('/')[2];
+            for(let [filename, content] of selectedFiles.entries()) {
+                await fetch('/upload_attachment/' + projectID, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: filename,
+                        content: content 
+                    })
+                });
+            }
+            // Clear selected files
+            selectedFiles.clear();
+            document.getElementById('selected-files').innerHTML = '';
+        }
+    };
+
+    document.getElementById('execute').onclick = function() {
+        ws.send("<|execute|>" + chat);
+        chat = "";
+    };
+}); // End of DOMContentLoaded
+			
     </script>
 </head>
 <body>
     <div class="chat-container">
         <h1>chat</h1>
-        <div id="chat"></div>
+		<div id="file-upload">
+			<input type="file" id="files" multiple style="display: none">
+			<button onclick="document.getElementById('files').click()">Attach Files</button>
+			<div id="selected-files"></div>
+		</div>
+		<div id="chat"></div>
         <textarea id="message" placeholder="Your message..."></textarea>
         <button id="send">Send</button>
         <button id="execute">Execute Script</button>

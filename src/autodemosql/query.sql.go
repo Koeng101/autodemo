@@ -33,6 +33,25 @@ func (q *Queries) AddMessageHistory(ctx context.Context, arg AddMessageHistoryPa
 	return i, err
 }
 
+const createAttachment = `-- name: CreateAttachment :one
+INSERT INTO attachments (project_message_history_id, filename, content) 
+VALUES (?, ?, ?) 
+RETURNING id
+`
+
+type CreateAttachmentParams struct {
+	ProjectMessageHistoryID int64
+	Filename                string
+	Content                 string
+}
+
+func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, createAttachment, arg.ProjectMessageHistoryID, arg.Filename, arg.Content)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createCode = `-- name: CreateCode :one
 INSERT INTO code(project_message_history_id, code) VALUES (?, ?) RETURNING id
 `
@@ -111,6 +130,40 @@ func (q *Queries) GetAllStepsForCodeFromProjectHistoryID(ctx context.Context, pr
 			&i.DataPassthrough,
 			&i.Data,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getAttachmentsForMessage = `-- name: GetAttachmentsForMessage :many
+SELECT id, filename, content FROM attachments 
+WHERE project_message_history_id = ?
+`
+
+type GetAttachmentsForMessageRow struct {
+	ID       int64
+	Filename string
+	Content  string
+}
+
+func (q *Queries) GetAttachmentsForMessage(ctx context.Context, projectMessageHistoryID int64) ([]GetAttachmentsForMessageRow, error) {
+	rows, err := q.db.QueryContext(ctx, getAttachmentsForMessage, projectMessageHistoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAttachmentsForMessageRow
+	for rows.Next() {
+		var i GetAttachmentsForMessageRow
+		if err := rows.Scan(&i.ID, &i.Filename, &i.Content); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
